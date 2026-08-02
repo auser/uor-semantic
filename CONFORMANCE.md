@@ -58,6 +58,7 @@ lowercased ID.
 | `CX-14` | `build` | The compiler emits a deterministic structural R4G1 container with canonical section layout and valid BLAKE3 HEAD and artifact CIDs. |
 | `CX-15` | `build` | The CLI compile commands write the validated `.uors` artifact and an optional structural R4G1 container through a typed output path. |
 | `CX-16` | `build` | R4G1 export derives deterministic refinement edges and reverse-index ranges, while the borrowed graph view rejects invalid edge flags and reverse IDs. |
+| `CX-17` | `build` | R4G1 export emits a target-framed EMIT root prior and five-level RX1 EXCT evidence, while bounded core validation rejects malformed EXCT framing. |
 
 ## compiler
 

@@ -1,11 +1,13 @@
 //! Canonical structural R4G1 export for compiled semantic artifacts.
 //!
 //! This bridge deliberately emits the bounded container shape and valid
-//! BLAKE3 identities, not a scored R4G1 certificate. The current semantic
-//! artifact has no target-compatible predictive edge evidence or residual
-//! EXCT table, so those parts remain represented conservatively.
+//! BLAKE3 identities, not a scored R4G1 certificate. The emitted EMIT root
+//! prior and RX1-framed EXCT table are structural evidence derived from the
+//! semantic artifact; their synthetic route-code keys are not target graded
+//! codes and therefore do not claim scored R4G1 equivalence.
 
 use core::fmt;
+use std::collections::BTreeMap;
 
 use uor_semantic::{ArtifactError, ArtifactView, R4G1Graph, R4G1Section, R4G1Structure};
 
@@ -20,6 +22,9 @@ const REGION_RECORD_BYTES: usize = 128;
 const EMISSION_RECORD_BYTES: usize = 8;
 const EDGE_RECORD_BYTES: usize = 16;
 const REVERSE_INDEX_ENTRY_BYTES: usize = 4;
+const EXCT_LEVELS: usize = 5;
+const EXACT_RECORD_BYTES: usize = 256;
+const EXACT_OFFSET_FIELD: usize = 32;
 const REGION_OFFSET_FIELD: usize = 40;
 const EMISSION_OFFSET_FIELD: usize = 48;
 
@@ -100,7 +105,8 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
     let emission_offset = usize::try_from(emission_offset)
         .map_err(|_| R4G1ExportError::FormatLimit("emission offset exceeds usize"))?;
 
-    let mut emit = vec![2, 0, 0, 0];
+    let mut region_emit = Vec::new();
+    let mut root_scores: BTreeMap<u32, (i64, u32)> = BTreeMap::new();
     let mut nodes = Vec::with_capacity(node_count);
     nodes.push(Node {
         child_start: 0,
@@ -154,10 +160,7 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
             .ok_or(R4G1ExportError::FormatLimit(
                 "emission records are out of bounds",
             ))?;
-        let exported_emission_start = emit
-            .len()
-            .checked_sub(4)
-            .ok_or(R4G1ExportError::FormatLimit("EMIT descriptor is missing"))?;
+        let exported_emission_start = region_emit.len();
         let exported_emission_start = u32::try_from(exported_emission_start)
             .map_err(|_| R4G1ExportError::FormatLimit("emission offset exceeds u32"))?;
         for entry in source_emissions.chunks_exact(EMISSION_RECORD_BYTES) {
@@ -166,7 +169,11 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
                 return Err(R4G1ExportError::TokenOutOfRange { token });
             }
             max_token = Some(max_token.map_or(token, |current: u32| current.max(token)));
-            emit.extend_from_slice(entry);
+            region_emit.extend_from_slice(entry);
+            let score = read_i32(entry, 4)?;
+            let aggregate = root_scores.entry(token).or_insert((0, 0));
+            aggregate.0 = aggregate.0.saturating_add(i64::from(score));
+            aggregate.1 = aggregate.1.saturating_add(1);
         }
         max_emissions = max_emissions.max(u32::try_from(emission_len).unwrap_or(u32::MAX));
 
@@ -203,6 +210,45 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
             path_len: source[9],
         });
     }
+
+    let mut emit = vec![2, 0, 0, 0];
+    let root_prefix = 16usize
+        .checked_add(
+            root_scores
+                .len()
+                .checked_mul(EMISSION_RECORD_BYTES)
+                .ok_or(R4G1ExportError::FormatLimit("root prior size overflow"))?,
+        )
+        .ok_or(R4G1ExportError::FormatLimit("root prior size overflow"))?;
+    let root_count = u32::try_from(root_scores.len())
+        .map_err(|_| R4G1ExportError::FormatLimit("root prior count exceeds u32"))?;
+    let total_count = root_scores
+        .values()
+        .fold(0u32, |total, (_, count)| total.saturating_add(*count));
+    let root_floor = root_scores
+        .values()
+        .map(|(sum, count)| average_score(*sum, *count))
+        .min()
+        .unwrap_or(0);
+    emit.extend_from_slice(&root_count.to_le_bytes());
+    emit.extend_from_slice(&total_count.to_le_bytes());
+    emit.extend_from_slice(&root_floor.to_le_bytes());
+    emit.extend_from_slice(&0u32.to_le_bytes());
+    for (token, (sum, count)) in &root_scores {
+        emit.extend_from_slice(&token.to_le_bytes());
+        emit.extend_from_slice(&average_score(*sum, *count).to_le_bytes());
+    }
+    debug_assert_eq!(emit.len(), 4 + root_prefix);
+    for node in nodes.iter_mut().skip(1) {
+        node.emission_start = node
+            .emission_start
+            .checked_add(
+                u32::try_from(root_prefix)
+                    .map_err(|_| R4G1ExportError::FormatLimit("root prior offset exceeds u32"))?,
+            )
+            .ok_or(R4G1ExportError::FormatLimit("emission offset overflow"))?;
+    }
+    emit.extend_from_slice(&region_emit);
 
     let mut edges = Vec::with_capacity(region_count);
     for node_index in 1..node_count {
@@ -339,6 +385,8 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
         edge_section.extend_from_slice(&edge_id.to_le_bytes());
     }
 
+    let exct = build_exct(&artifact.bytes, &view, &root_scores, emission_offset)?;
+
     let max_depth = nodes.iter().map(|node| node.depth).max().unwrap_or(0);
     let depth_count = max_depth
         .checked_add(1)
@@ -370,6 +418,7 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
         (4u32, edge_section.as_slice()),
         (5u32, rout.as_slice()),
         (6u32, emit.as_slice()),
+        (7u32, exct.as_slice()),
         (8u32, prov.as_slice()),
     ];
     let mut bytes = emit_container(&sections)?;
@@ -529,6 +578,10 @@ fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, R4G1ExportError> {
     Ok(u32::from_le_bytes([value[0], value[1], value[2], value[3]]))
 }
 
+fn read_i32(bytes: &[u8], offset: usize) -> Result<i32, R4G1ExportError> {
+    Ok(i32::from_le_bytes(read_u32(bytes, offset)?.to_le_bytes()))
+}
+
 fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, R4G1ExportError> {
     let value = bytes
         .get(offset..offset + 8)
@@ -538,6 +591,129 @@ fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, R4G1ExportError> {
     Ok(u64::from_le_bytes([
         value[0], value[1], value[2], value[3], value[4], value[5], value[6], value[7],
     ]))
+}
+
+fn average_score(sum: i64, count: u32) -> i32 {
+    if count == 0 {
+        return 0;
+    }
+    let average = sum / i64::from(count);
+    i32::try_from(average).unwrap_or(if average.is_negative() {
+        i32::MIN
+    } else {
+        i32::MAX
+    })
+}
+
+fn build_exct(
+    artifact: &[u8],
+    view: &ArtifactView<'_>,
+    root_scores: &BTreeMap<u32, (i64, u32)>,
+    emission_offset: usize,
+) -> Result<Vec<u8>, R4G1ExportError> {
+    let exact_offset = usize::try_from(read_u64(artifact, EXACT_OFFSET_FIELD)?)
+        .map_err(|_| R4G1ExportError::FormatLimit("exact offset exceeds usize"))?;
+    let mut tables: BTreeMap<Vec<u8>, BTreeMap<u32, (i64, u32)>> = BTreeMap::new();
+    let mut exact_index = 0usize;
+    while exact_index < view.exact_count() {
+        let record_offset = exact_offset
+            .checked_add(
+                exact_index
+                    .checked_mul(EXACT_RECORD_BYTES)
+                    .ok_or(R4G1ExportError::FormatLimit("exact offset overflow"))?,
+            )
+            .ok_or(R4G1ExportError::FormatLimit("exact offset overflow"))?;
+        let record_end = record_offset
+            .checked_add(EXACT_RECORD_BYTES)
+            .ok_or(R4G1ExportError::FormatLimit("exact record end overflow"))?;
+        let record =
+            artifact
+                .get(record_offset..record_end)
+                .ok_or(R4G1ExportError::FormatLimit(
+                    "exact record is out of bounds",
+                ))?;
+        let context_len = usize::from(read_u16(record, 8)?);
+        let level = context_len.min(EXCT_LEVELS - 1);
+        let key = record[16..16 + level].to_vec();
+        let table = tables.entry(key).or_default();
+        let emission_start = usize::try_from(read_u32(record, 12)?)
+            .map_err(|_| R4G1ExportError::FormatLimit("exact emission index exceeds usize"))?;
+        let emission_len = usize::from(read_u16(record, 10)?);
+        let mut emission_index = 0usize;
+        while emission_index < emission_len {
+            let global_index =
+                emission_start
+                    .checked_add(emission_index)
+                    .ok_or(R4G1ExportError::FormatLimit(
+                        "exact emission index overflow",
+                    ))?;
+            let entry_offset = emission_offset
+                .checked_add(global_index.checked_mul(EMISSION_RECORD_BYTES).ok_or(
+                    R4G1ExportError::FormatLimit("exact emission offset overflow"),
+                )?)
+                .ok_or(R4G1ExportError::FormatLimit(
+                    "exact emission offset overflow",
+                ))?;
+            let entry_end = entry_offset
+                .checked_add(EMISSION_RECORD_BYTES)
+                .ok_or(R4G1ExportError::FormatLimit("exact emission end overflow"))?;
+            let entry =
+                artifact
+                    .get(entry_offset..entry_end)
+                    .ok_or(R4G1ExportError::FormatLimit(
+                        "exact emission record is out of bounds",
+                    ))?;
+            let token = read_u32(entry, 0)?;
+            let score = i64::from(read_i32(entry, 4)?);
+            let aggregate = table.entry(token).or_insert((0, 0));
+            aggregate.0 = aggregate.0.saturating_add(score);
+            aggregate.1 = aggregate.1.saturating_add(1);
+            emission_index += 1;
+        }
+        exact_index += 1;
+    }
+
+    let mut output = vec![2, 0, 0, 0];
+    output.extend_from_slice(b"RX1\0");
+    output.push(EXCT_LEVELS as u8);
+    output.extend_from_slice(&[0, 0, 0]);
+    let mut level = 0usize;
+    while level < EXCT_LEVELS {
+        let key_count = tables.keys().filter(|key| key.len() == level).count();
+        let key_count = u32::try_from(key_count)
+            .map_err(|_| R4G1ExportError::FormatLimit("EXCT key count exceeds u32"))?;
+        output.extend_from_slice(&key_count.to_le_bytes());
+        for (key, table) in tables.iter().filter(|(key, _)| key.len() == level) {
+            output.push(
+                u8::try_from(key.len()).map_err(|_| {
+                    R4G1ExportError::FormatLimit("EXCT route-code length exceeds u8")
+                })?,
+            );
+            output.extend_from_slice(key);
+            let total = table
+                .values()
+                .fold(0u32, |total, (_, count)| total.saturating_add(*count));
+            let entry_count = u32::try_from(table.len())
+                .map_err(|_| R4G1ExportError::FormatLimit("EXCT entry count exceeds u32"))?;
+            output.extend_from_slice(&total.max(1).to_le_bytes());
+            output.extend_from_slice(&entry_count.to_le_bytes());
+            for (token, (sum, count)) in table {
+                let root = root_scores.get(token).map_or(0, |(root_sum, root_count)| {
+                    average_score(*root_sum, *root_count)
+                });
+                let residual = i64::from(average_score(*sum, *count)) - i64::from(root);
+                let residual = i32::try_from(residual).unwrap_or(if residual.is_negative() {
+                    i32::MIN
+                } else {
+                    i32::MAX
+                });
+                output.extend_from_slice(&token.to_le_bytes());
+                output.extend_from_slice(&residual.to_le_bytes());
+            }
+        }
+        level += 1;
+    }
+    Ok(output)
 }
 
 use crate::CompiledArtifact;

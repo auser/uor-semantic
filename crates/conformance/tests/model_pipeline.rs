@@ -1101,7 +1101,7 @@ fn compiled_artifact_exports_to_structural_r4g1_with_valid_cids_cx_14() {
         graph.identity().artifact_id().as_bytes(),
         &exported.artifact_cid
     );
-    assert_eq!(graph.identity().section_count(), 7);
+    assert_eq!(graph.identity().section_count(), 8);
     verify_r4g1_cids(&exported.bytes).expect("exported CIDs verify");
 
     let mut tampered = exported.bytes.clone();
@@ -1175,4 +1175,51 @@ fn r4g1_graph_view_validates_edge_flags_and_reverse_ids_cx_16() {
             edge_id: 1,
         })
     );
+}
+
+#[test]
+fn r4g1_export_emits_root_prior_and_rx1_exct_cx_17() {
+    let compiled = compile(&train(), CompilerConfig::accuracy()).expect("fixture compiles");
+    let exported = export_r4g1(&compiled).expect("structural R4G1 export succeeds");
+    let graph = R4G1Graph::parse(&exported.bytes).expect("exported graph validates");
+
+    let emit = graph.section(R4G1Section::Emit).expect("EMIT exists");
+    assert_eq!(&emit[..4], &[2, 0, 0, 0]);
+    assert!(u32::from_le_bytes([emit[4], emit[5], emit[6], emit[7]]) > 0);
+    assert!(u32::from_le_bytes([emit[8], emit[9], emit[10], emit[11]]) > 0);
+    assert_eq!(&emit[16..20], &[0, 0, 0, 0]);
+
+    let exct = graph.section(R4G1Section::Exct).expect("EXCT exists");
+    assert_eq!(&exct[..4], &[2, 0, 0, 0]);
+    assert_eq!(&exct[4..8], b"RX1\0");
+    assert_eq!(exct[8], 5);
+
+    let mut malformed = exported.bytes.clone();
+    let section_count =
+        u32::from_le_bytes([malformed[16], malformed[17], malformed[18], malformed[19]]);
+    let mut cursor = 88usize;
+    let mut exct_offset = None;
+    let mut section = 0u32;
+    while section < section_count {
+        let id = u32::from_le_bytes([
+            malformed[cursor],
+            malformed[cursor + 1],
+            malformed[cursor + 2],
+            malformed[cursor + 3],
+        ]);
+        if id == R4G1Section::Exct.raw() {
+            exct_offset = Some(u32::from_le_bytes([
+                malformed[cursor + 8],
+                malformed[cursor + 9],
+                malformed[cursor + 10],
+                malformed[cursor + 11],
+            ]) as usize);
+            break;
+        }
+        cursor += 16;
+        section += 1;
+    }
+    let exct_offset = exct_offset.expect("EXCT table entry exists");
+    malformed[exct_offset + 8] = 4;
+    assert_eq!(R4G1Graph::parse(&malformed), Err(R4G1Error::InvalidExct));
 }

@@ -341,3 +341,9 @@ id = "CX-16"
 level = "build"
 suite = "compatibility"
 statement = "R4G1 export derives deterministic refinement edges and reverse-index ranges, while the borrowed graph view rejects invalid edge flags and reverse IDs."
+
+[[id]]
+id = "CX-17"
+level = "build"
+suite = "compatibility"
+statement = "R4G1 export emits a target-framed EMIT root prior and five-level RX1 EXCT evidence, while bounded core validation rejects malformed EXCT framing."

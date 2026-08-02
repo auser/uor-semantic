@@ -69,6 +69,13 @@ pub enum R4G1Error {
         /// Section whose fixed prefix is absent.
         section: R4G1Section,
     },
+    /// A storage descriptor has an unsupported width or fixed-point shift.
+    InvalidStorageDescriptor {
+        /// Section containing the descriptor.
+        section: R4G1Section,
+    },
+    /// The optional EXCT section is not a bounded RX1-framed table.
+    InvalidExct,
     /// A HEAD signature width declaration is inconsistent.
     InvalidHeadBounds,
     /// An unknown section without the optional-section bit was declared.
@@ -217,6 +224,8 @@ impl fmt::Display for R4G1Error {
             Self::HeadLengthMismatch => "R4G1 HEAD is not exactly 224 bytes",
             Self::SectionLengthMismatch { .. } => "R4G1 graph section length is invalid",
             Self::SectionTooShort { .. } => "R4G1 graph section is too short",
+            Self::InvalidStorageDescriptor { .. } => "R4G1 storage descriptor is invalid",
+            Self::InvalidExct => "R4G1 EXCT RX1 framing is invalid",
             Self::InvalidHeadBounds => "R4G1 HEAD bounds are inconsistent",
             Self::UnknownMandatorySection { .. } => "R4G1 unknown mandatory section",
             Self::MissingRequiredSection { .. } => "R4G1 required section is missing",
@@ -675,10 +684,10 @@ impl<'a> R4G1Graph<'a> {
             .ok_or(R4G1Error::SectionTooShort {
                 section: R4G1Section::Emit,
             })?;
-        if emit.len() < 4 {
-            return Err(R4G1Error::SectionTooShort {
-                section: R4G1Section::Emit,
-            });
+        validate_storage_descriptor(emit, R4G1Section::Emit)?;
+        if let Some(exct) = structure.section(R4G1Section::Exct) {
+            validate_storage_descriptor(exct, R4G1Section::Exct)?;
+            validate_exct(exct)?;
         }
         let emit_remainder = emit.len() - 4;
         let max_frontier = read_u16(head, 180);
@@ -1099,6 +1108,71 @@ fn validate_edges(
         }
         node += 1;
     }
+    Ok(())
+}
+
+fn validate_storage_descriptor(bytes: &[u8], section: R4G1Section) -> Result<(), R4G1Error> {
+    if bytes.len() < 4 {
+        return Err(R4G1Error::InvalidStorageDescriptor { section });
+    }
+    let shift = i8::from_le_bytes([bytes[1]]);
+    if bytes[0] > 2 || !(-31..=31).contains(&shift) {
+        return Err(R4G1Error::InvalidStorageDescriptor { section });
+    }
+    Ok(())
+}
+
+fn validate_exct(bytes: &[u8]) -> Result<(), R4G1Error> {
+    if bytes.len() < 12 || bytes.get(4..8) != Some(b"RX1\0") || bytes[8] != 5 {
+        return Err(R4G1Error::InvalidExct);
+    }
+    if bytes[9] != 0 || bytes[10] != 0 || bytes[11] != 0 {
+        return Err(R4G1Error::InvalidExct);
+    }
+    let mut offset = 12usize;
+    let mut level = 0u8;
+    while level < 5 {
+        let key_count = exct_u32(bytes, &mut offset).ok_or(R4G1Error::InvalidExct)?;
+        let mut key_index = 0u32;
+        while key_index < key_count {
+            let key_len = bytes.get(offset).copied().ok_or(R4G1Error::InvalidExct)?;
+            offset = offset.checked_add(1).ok_or(R4G1Error::RangeOverflow)?;
+            if key_len != level {
+                return Err(R4G1Error::InvalidExct);
+            }
+            exct_advance(bytes, &mut offset, usize::from(key_len))?;
+            let _total = exct_u32(bytes, &mut offset).ok_or(R4G1Error::InvalidExct)?;
+            let entry_count = exct_u32(bytes, &mut offset).ok_or(R4G1Error::InvalidExct)?;
+            let mut entry = 0u32;
+            while entry < entry_count {
+                exct_advance(bytes, &mut offset, 8)?;
+                entry += 1;
+            }
+            key_index += 1;
+        }
+        level += 1;
+    }
+    if offset != bytes.len() {
+        return Err(R4G1Error::InvalidExct);
+    }
+    Ok(())
+}
+
+fn exct_u32(bytes: &[u8], offset: &mut usize) -> Option<u32> {
+    let start = core::mem::replace(offset, 0);
+    let end = start.checked_add(4)?;
+    let value = bytes.get(start..end)?;
+    let _ = core::mem::replace(offset, end);
+    Some(u32::from_le_bytes([value[0], value[1], value[2], value[3]]))
+}
+
+fn exct_advance(bytes: &[u8], offset: &mut usize, width: usize) -> Result<(), R4G1Error> {
+    let start = core::mem::replace(offset, 0);
+    let end = start.checked_add(width).ok_or(R4G1Error::RangeOverflow)?;
+    if end > bytes.len() {
+        return Err(R4G1Error::InvalidExct);
+    }
+    let _ = core::mem::replace(offset, end);
     Ok(())
 }
 

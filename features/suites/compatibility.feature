@@ -95,3 +95,9 @@ Feature: R4G1 and TLA5 compatibility bridge
     Given compiled region paths and a canonical EDGE section
     When the R4G1 graph view validates the emitted graph
     Then refinement edges and reverse ranges resolve, while malformed flags or IDs fail
+
+  @CX-17 @build
+  Scenario: R4G1 carries root-prior and exact-context evidence
+    Given compiled emissions and exact-context records
+    When a structural R4G1 container is exported
+    Then EMIT root framing and RX1 EXCT evidence validate without claiming scored equivalence
