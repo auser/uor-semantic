@@ -21,7 +21,7 @@ use uor_semantic_cli::{
 use uor_semantic_compiler::{
     CompilerConfig, Observation, ObservationCorpus, ObservationMetadata, ObservedEmission,
     ParityThresholds, RolloutCorpus, compile, evaluate, evaluate_graph_only, evaluate_rollouts,
-    export_r4g1, verify_r4g1_cids,
+    export_r4g1, replay_r4g1, verify_r4g1_cids,
 };
 
 const TRAIN: &str = concat!(
@@ -1330,4 +1330,54 @@ fn r4g1_export_emits_predictive_edges_with_refinement_ranges_cx_19() {
             edge_index += 1;
         }
     }
+}
+
+#[test]
+fn r4g1_replay_certificate_reports_predictive_score_agreement_cx_20() {
+    let compiled = compile(&train(), CompilerConfig::accuracy()).expect("fixture compiles");
+    let exported = export_r4g1(&compiled).expect("structural R4G1 export succeeds");
+    let report = replay_r4g1(&compiled.bytes, &exported.bytes).expect("replay evaluates");
+
+    assert!(report.expected_transitions > 0);
+    assert_eq!(report.expected_transitions, report.emitted_predictive_edges);
+    assert_eq!(report.expected_transitions, report.matched_transitions);
+    assert_eq!(report.expected_transitions, report.score_matches);
+    assert_eq!(report.score_agreement_basis_points(), 10_000);
+    assert!(report.is_complete());
+
+    let mut tampered = exported.bytes.clone();
+    let section_count = u32::from_le_bytes(tampered[16..20].try_into().expect("header field"));
+    let mut section_index = 0u32;
+    let mut edge_offset = None;
+    while section_index < section_count {
+        let table = 88 + section_index as usize * 16;
+        let id = u32::from_le_bytes(tampered[table..table + 4].try_into().expect("section ID"));
+        if id == 4 {
+            edge_offset = Some(u32::from_le_bytes(
+                tampered[table + 8..table + 12]
+                    .try_into()
+                    .expect("section offset"),
+            ) as usize);
+            break;
+        }
+        section_index += 1;
+    }
+    let edge_offset = edge_offset.expect("EDGE section exists");
+    let mut edge_index = 0usize;
+    while tampered[edge_offset + edge_index * 16 + 12] != 2 {
+        edge_index += 1;
+    }
+    let score = edge_offset + edge_index * 16 + 8;
+    tampered[score..score + 4].copy_from_slice(&i32::MAX.to_le_bytes());
+    let tampered_report = replay_r4g1(&compiled.bytes, &tampered).expect("tampered graph parses");
+    assert_eq!(
+        tampered_report.expected_transitions,
+        report.expected_transitions
+    );
+    assert_eq!(
+        tampered_report.matched_transitions,
+        report.matched_transitions
+    );
+    assert_eq!(tampered_report.score_matches, 0);
+    assert!(!tampered_report.is_complete());
 }

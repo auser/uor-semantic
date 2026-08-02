@@ -113,3 +113,9 @@ Feature: R4G1 and TLA5 compatibility bridge
     Given exact contexts with deterministic next-context continuations
     When a structural R4G1 container is exported
     Then kind-2 predictive edges carry fixed-point scores and refinement ranges remain valid
+
+  @CX-20 @build
+  Scenario: R4G1 replay reports bounded transition agreement
+    Given a validated semantic artifact and its R4G1 export
+    When the replay certificate recomputes predictive transitions
+    Then emitted-edge coverage and fixed-point score agreement are reported without claiming target replay equivalence

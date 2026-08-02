@@ -21,5 +21,8 @@ pub use parity::{
     ParityError, ParityReport, ParityThresholds, RolloutParityReport, evaluate,
     evaluate_graph_only, evaluate_rollouts,
 };
-pub use r4g1_export::{R4G1Export, R4G1ExportError, export_r4g1, verify_r4g1_cids};
+pub use r4g1_export::{
+    R4G1Export, R4G1ExportError, R4G1ReplayError, R4G1ReplayReport, export_r4g1, replay_r4g1,
+    verify_r4g1_cids,
+};
 pub use rollout::{MAX_ROLLOUT_TOKENS, Rollout, RolloutCorpus, RolloutError, RolloutMetadata};

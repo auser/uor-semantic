@@ -61,6 +61,7 @@ lowercased ID.
 | `CX-17` | `build` | R4G1 export emits a target-framed EMIT root prior and five-level RX1 EXCT evidence, while bounded core validation rejects malformed EXCT framing. |
 | `CX-18` | `build` | The no_std compatibility scorer accumulates signed R4G1 residual contributions with saturation, ignores duplicate evidence IDs, reports fixed-capacity exhaustion, and orders equal-score candidates by ascending ID. |
 | `CX-19` | `build` | R4G1 export emits bounded predictive kind-2 edges from deterministic exact-context continuations, carrying accumulator-derived fixed-point scores while keeping refinement child ranges valid. |
+| `CX-20` | `build` | A bounded R4G1 replay certificate recomputes predictive transitions from the validated artifact, reports emitted-edge coverage and fixed-point score agreement, and does not claim target replay equivalence. |
 
 ## compiler
 

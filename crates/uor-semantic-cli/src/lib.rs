@@ -14,8 +14,9 @@ use uor_semantic::{
 };
 use uor_semantic_compiler::{
     CompiledArtifact, CompilerConfig, MAX_ROLLOUT_TOKENS, ObservationCorpus, ParityReport,
-    ParityThresholds, R4G1Export, R4G1ExportError, RolloutCorpus, compile as compile_observations,
-    evaluate, evaluate_graph_only, evaluate_rollouts, export_r4g1 as export_compiled_r4g1,
+    ParityThresholds, R4G1Export, R4G1ExportError, R4G1ReplayError, RolloutCorpus,
+    compile as compile_observations, evaluate, evaluate_graph_only, evaluate_rollouts,
+    export_r4g1 as export_compiled_r4g1, replay_r4g1,
 };
 
 const CAPTURE_SCRIPT: &str = include_str!("../../../scripts/capture_hf.py");
@@ -44,6 +45,8 @@ pub enum CliError {
     Generation(uor_semantic::GenerationError),
     /// Structural R4G1 export failed.
     R4G1Export(R4G1ExportError),
+    /// R4G1 replay verification failed.
+    R4G1Replay(R4G1ReplayError),
     /// An external command exited unsuccessfully.
     ProcessFailed {
         /// Program that failed.
@@ -88,6 +91,7 @@ impl fmt::Display for CliError {
             Self::Artifact(error) => write!(formatter, "artifact error: {error}"),
             Self::Generation(error) => write!(formatter, "generation error: {error}"),
             Self::R4G1Export(error) => write!(formatter, "R4G1 export error: {error}"),
+            Self::R4G1Replay(error) => write!(formatter, "R4G1 replay error: {error}"),
             Self::ProcessFailed {
                 program,
                 code,
@@ -167,6 +171,12 @@ impl From<uor_semantic::GenerationError> for CliError {
 impl From<R4G1ExportError> for CliError {
     fn from(error: R4G1ExportError) -> Self {
         Self::R4G1Export(error)
+    }
+}
+
+impl From<R4G1ReplayError> for CliError {
+    fn from(error: R4G1ReplayError) -> Self {
+        Self::R4G1Replay(error)
     }
 }
 
@@ -414,6 +424,7 @@ fn print_help() {
         "Commands:\n",
         "  self-test\n",
         "  artifact inspect <artifact>\n",
+        "  artifact replay <artifact> --r4g1 <container>\n",
         "  artifact predict <artifact> --tokens <csv> [--graph-only]\n",
         "  artifact generate <artifact> --tokens <csv> --max-tokens <n>\n",
         "  model download <repo> --revision <40-hex> --output <dir>\n",
@@ -498,6 +509,11 @@ fn command_artifact(arguments: &[String]) -> Result<(), CliError> {
         "inspect" => {
             let path = required_positional(arguments, 1, "artifact path")?;
             artifact_inspect(Path::new(path))
+        }
+        "replay" => {
+            let artifact = required_positional(arguments, 1, "artifact path")?;
+            let r4g1 = required_option(arguments, "--r4g1")?;
+            artifact_replay(Path::new(artifact), Path::new(r4g1))
         }
         "predict" => {
             let path = required_positional(arguments, 1, "artifact path")?;
@@ -609,6 +625,27 @@ fn artifact_inspect(path: &Path) -> Result<(), CliError> {
     println!("regions: {}", artifact.region_count());
     println!("emissions: {}", artifact.emission_count());
     println!("bytes: {}", bytes.len());
+    Ok(())
+}
+
+fn artifact_replay(artifact_path: &Path, r4g1_path: &Path) -> Result<(), CliError> {
+    let artifact = std::fs::read(artifact_path)?;
+    let r4g1 = std::fs::read(r4g1_path)?;
+    let report = replay_r4g1(&artifact, &r4g1)?;
+    println!("artifact: {}", artifact_path.display());
+    println!("r4g1: {}", r4g1_path.display());
+    println!("expected_transitions: {}", report.expected_transitions);
+    println!(
+        "emitted_predictive_edges: {}",
+        report.emitted_predictive_edges
+    );
+    println!("matched_transitions: {}", report.matched_transitions);
+    println!("score_matches: {}", report.score_matches);
+    println!(
+        "score_agreement_basis_points: {}",
+        report.score_agreement_basis_points()
+    );
+    println!("complete: {}", report.is_complete());
     Ok(())
 }
 

@@ -5,8 +5,9 @@
 //! prior and RX1-framed EXCT table are structural evidence derived from the
 //! semantic artifact; their synthetic route-code keys are not target graded
 //! codes and therefore do not claim scored R4G1 equivalence. Predictive
-//! kind-2 edges are emitted only from deterministic continuation evidence;
-//! they are not a target replay certificate.
+//! kind-2 edges are emitted only from deterministic continuation evidence. The
+//! replay certificate below checks this exporter/source boundary, not target
+//! runtime equivalence.
 
 use core::fmt;
 use std::collections::BTreeMap;
@@ -93,6 +94,212 @@ impl From<ArtifactError> for R4G1ExportError {
     fn from(error: ArtifactError) -> Self {
         Self::Artifact(error)
     }
+}
+
+/// Deterministic replay evidence for an emitted R4G1 predictive graph.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct R4G1ReplayReport {
+    /// Number of predictive transitions recomputed from the source artifact.
+    pub expected_transitions: u32,
+    /// Number of predictive edges present in the R4G1 graph.
+    pub emitted_predictive_edges: u32,
+    /// Recomputed transitions whose source, destination, and kind were emitted.
+    pub matched_transitions: u32,
+    /// Matched transitions whose fixed-point score exactly agrees.
+    pub score_matches: u32,
+}
+
+impl R4G1ReplayReport {
+    /// Returns score agreement in basis points over recomputed transitions.
+    pub const fn score_agreement_basis_points(self) -> u16 {
+        if self.expected_transitions == 0 {
+            return 10_000;
+        }
+        let value = self.score_matches.saturating_mul(10_000) / self.expected_transitions;
+        if value > 10_000 { 10_000 } else { value as u16 }
+    }
+
+    /// Returns whether every recomputed transition and score was emitted exactly once.
+    pub const fn is_complete(self) -> bool {
+        self.expected_transitions == self.emitted_predictive_edges
+            && self.expected_transitions == self.matched_transitions
+            && self.expected_transitions == self.score_matches
+    }
+
+    /// Serializes the bounded report for CLI and archival use.
+    pub fn to_json(self) -> String {
+        format!(
+            "{{\"expected_transitions\":{},\"emitted_predictive_edges\":{},\"matched_transitions\":{},\"score_matches\":{},\"score_agreement_basis_points\":{},\"complete\":{}}}",
+            self.expected_transitions,
+            self.emitted_predictive_edges,
+            self.matched_transitions,
+            self.score_matches,
+            self.score_agreement_basis_points(),
+            self.is_complete(),
+        )
+    }
+}
+
+/// Failure while replaying an R4G1 predictive graph against its source artifact.
+#[derive(Debug)]
+pub enum R4G1ReplayError {
+    /// The source semantic artifact is invalid.
+    Artifact(ArtifactError),
+    /// The R4G1 graph is structurally or semantically invalid.
+    Structural(uor_semantic::R4G1Error),
+    /// The graph could not be compared with the source evidence.
+    FormatLimit(&'static str),
+    /// The R4G1 root prior is malformed or not canonically ordered.
+    InvalidRootPrior,
+    /// Recomputing source transitions failed.
+    Export(R4G1ExportError),
+}
+
+impl fmt::Display for R4G1ReplayError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Artifact(error) => write!(formatter, "source artifact is invalid: {error}"),
+            Self::Structural(error) => write!(formatter, "R4G1 graph is invalid: {error}"),
+            Self::FormatLimit(message) => write!(formatter, "R4G1 replay limit: {message}"),
+            Self::InvalidRootPrior => formatter.write_str("R4G1 EMIT root prior is invalid"),
+            Self::Export(error) => {
+                write!(formatter, "R4G1 transition recomputation failed: {error}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for R4G1ReplayError {}
+
+/// Recomputes bounded predictive transitions and compares them with an R4G1 export.
+///
+/// This is an exporter/source replay certificate: it proves that the emitted
+/// predictive edges and fixed-point scores cover the source artifact's bounded
+/// transition evidence. It is not a certificate of replay equivalence with the
+/// separate R4 target runtime or teacher model.
+pub fn replay_r4g1(artifact: &[u8], r4g1: &[u8]) -> Result<R4G1ReplayReport, R4G1ReplayError> {
+    let view = ArtifactView::parse(artifact).map_err(R4G1ReplayError::Artifact)?;
+    let graph = R4G1Graph::parse(r4g1).map_err(R4G1ReplayError::Structural)?;
+    let root_scores = replay_root_scores(&graph)?;
+    let region_offset =
+        usize::try_from(read_u64(artifact, REGION_OFFSET_FIELD).map_err(|error| {
+            R4G1ReplayError::FormatLimit(match error {
+                R4G1ExportError::FormatLimit(message) => message,
+                _ => "region offset is unavailable",
+            })
+        })?)
+        .map_err(|_| R4G1ReplayError::FormatLimit("region offset exceeds usize"))?;
+    let emission_offset =
+        usize::try_from(read_u64(artifact, EMISSION_OFFSET_FIELD).map_err(|error| {
+            R4G1ReplayError::FormatLimit(match error {
+                R4G1ExportError::FormatLimit(message) => message,
+                _ => "emission offset is unavailable",
+            })
+        })?)
+        .map_err(|_| R4G1ReplayError::FormatLimit("emission offset exceeds usize"))?;
+    let expected = build_predictive_edges(
+        artifact,
+        &view,
+        region_offset,
+        emission_offset,
+        &root_scores,
+    )
+    .map_err(R4G1ReplayError::Export)?;
+
+    let mut emitted_predictive_edges = 0u32;
+    let mut edge_index = 0u32;
+    while edge_index < graph.edge_count() {
+        if graph
+            .edge(edge_index)
+            .ok_or(R4G1ReplayError::FormatLimit(
+                "edge disappeared during replay",
+            ))?
+            .kind
+            == 2
+        {
+            emitted_predictive_edges = emitted_predictive_edges.saturating_add(1);
+        }
+        edge_index += 1;
+    }
+
+    let mut matched_transitions = 0u32;
+    let mut score_matches = 0u32;
+    for expected_edge in &expected {
+        let mut candidate = 0u32;
+        while candidate < graph.edge_count() {
+            let edge = graph.edge(candidate).ok_or(R4G1ReplayError::FormatLimit(
+                "edge disappeared during replay",
+            ))?;
+            if edge.kind == expected_edge.kind
+                && edge.src == expected_edge.src
+                && edge.dst == expected_edge.dst
+            {
+                matched_transitions = matched_transitions.saturating_add(1);
+                if edge.score_q == expected_edge.score_q {
+                    score_matches = score_matches.saturating_add(1);
+                }
+                break;
+            }
+            candidate += 1;
+        }
+    }
+
+    Ok(R4G1ReplayReport {
+        expected_transitions: u32::try_from(expected.len())
+            .map_err(|_| R4G1ReplayError::FormatLimit("expected transition count exceeds u32"))?,
+        emitted_predictive_edges,
+        matched_transitions,
+        score_matches,
+    })
+}
+
+fn replay_root_scores(graph: &R4G1Graph<'_>) -> Result<BTreeMap<u32, (i64, u32)>, R4G1ReplayError> {
+    let emit = graph
+        .section(R4G1Section::Emit)
+        .ok_or(R4G1ReplayError::InvalidRootPrior)?;
+    if emit.len() < 20 {
+        return Err(R4G1ReplayError::InvalidRootPrior);
+    }
+    let count = usize::try_from(read_u32_export(emit, 4)?)
+        .map_err(|_| R4G1ReplayError::FormatLimit("R4G1 root-prior count exceeds usize"))?;
+    let end = 20usize
+        .checked_add(
+            count
+                .checked_mul(8)
+                .ok_or(R4G1ReplayError::InvalidRootPrior)?,
+        )
+        .ok_or(R4G1ReplayError::InvalidRootPrior)?;
+    if end > emit.len() {
+        return Err(R4G1ReplayError::InvalidRootPrior);
+    }
+    let mut scores = BTreeMap::new();
+    let mut previous = None;
+    let mut index = 0usize;
+    while index < count {
+        let offset = 20 + index * 8;
+        let token = read_u32_export(emit, offset)?;
+        if previous.is_some_and(|value| token <= value) {
+            return Err(R4G1ReplayError::InvalidRootPrior);
+        }
+        previous = Some(token);
+        let score = read_i32_export(emit, offset + 4)?;
+        scores.insert(token, (i64::from(score), 1));
+        index += 1;
+    }
+    Ok(scores)
+}
+
+fn read_u32_export(bytes: &[u8], offset: usize) -> Result<u32, R4G1ReplayError> {
+    let value = bytes
+        .get(offset..offset + 4)
+        .ok_or(R4G1ReplayError::InvalidRootPrior)?;
+    Ok(u32::from_le_bytes([value[0], value[1], value[2], value[3]]))
+}
+
+fn read_i32_export(bytes: &[u8], offset: usize) -> Result<i32, R4G1ReplayError> {
+    Ok(i32::from_le_bytes(
+        read_u32_export(bytes, offset)?.to_le_bytes(),
+    ))
 }
 
 /// Converts a validated `.uors` artifact into a deterministic structural R4G1 container.

@@ -359,3 +359,9 @@ id = "CX-19"
 level = "build"
 suite = "compatibility"
 statement = "R4G1 export emits bounded predictive kind-2 edges from deterministic exact-context continuations, carrying accumulator-derived fixed-point scores while keeping refinement child ranges valid."
+
+[[id]]
+id = "CX-20"
+level = "build"
+suite = "compatibility"
+statement = "A bounded R4G1 replay certificate recomputes predictive transitions from the validated artifact, reports emitted-edge coverage and fixed-point score agreement, and does not claim target replay equivalence."
