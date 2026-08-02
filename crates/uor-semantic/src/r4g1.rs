@@ -203,6 +203,31 @@ pub enum R4G1Error {
         /// LEAF instruction index.
         op_index: u32,
     },
+    /// The caller supplied a signature with a different word width.
+    SignatureWidthMismatch {
+        /// Supplied signature width.
+        provided: u16,
+        /// HEAD-declared signature width.
+        expected: u16,
+    },
+    /// A ROUT shortlist is not a whole number of fixed-width node IDs.
+    RoutingTableMalformed,
+    /// A ROUT shortlist names a node outside the validated NODE section.
+    RoutingCandidateOutOfBounds {
+        /// Candidate node ID.
+        candidate: u32,
+    },
+    /// The caller-owned route buffer cannot retain another candidate.
+    RouteCapacityExceeded,
+    /// The EMIT section uses a storage descriptor outside this runtime slice.
+    EmissionEncodingUnsupported,
+    /// The caller-owned emission buffer cannot retain another entry.
+    EmissionCapacityExceeded,
+    /// A node index is outside the validated NODE section.
+    NodeOutOfBounds {
+        /// Requested node index.
+        node: u32,
+    },
 }
 
 impl fmt::Display for R4G1Error {
@@ -255,6 +280,13 @@ impl fmt::Display for R4G1Error {
             Self::RoutingShortlistOutOfBounds { .. } => {
                 "R4G1 ROUT shortlist range is out of bounds"
             }
+            Self::SignatureWidthMismatch { .. } => "R4G1 signature width does not match HEAD",
+            Self::RoutingTableMalformed => "R4G1 ROUT shortlist table is malformed",
+            Self::RoutingCandidateOutOfBounds { .. } => "R4G1 ROUT shortlist names an unknown node",
+            Self::RouteCapacityExceeded => "R4G1 route candidate capacity was exceeded",
+            Self::EmissionEncodingUnsupported => "R4G1 EMIT encoding is unsupported",
+            Self::EmissionCapacityExceeded => "R4G1 emission capacity was exceeded",
+            Self::NodeOutOfBounds { .. } => "R4G1 node index is out of bounds",
         };
         formatter.write_str(message)
     }
@@ -346,6 +378,102 @@ pub struct R4G1Edge {
     pub flags: u8,
     /// Reserved or edge-algebra contribution identifier.
     pub reserved: u16,
+}
+
+/// One fixed-point token emission decoded from an R4G1 EMIT range.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct R4G1Emission {
+    /// Token identifier.
+    pub token: u32,
+    /// Decoded fixed-point score.
+    pub score_q: i32,
+}
+
+/// Caller-owned bounded candidates returned by ROUT execution.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct R4G1RouteCandidates<const CAPACITY: usize> {
+    entries: [u32; CAPACITY],
+    len: usize,
+}
+
+impl<const CAPACITY: usize> R4G1RouteCandidates<CAPACITY> {
+    /// Creates an empty route result.
+    pub const fn new() -> Self {
+        Self {
+            entries: [0; CAPACITY],
+            len: 0,
+        }
+    }
+
+    /// Returns retained node IDs in ROUT order.
+    pub fn as_slice(&self) -> &[u32] {
+        &self.entries[..self.len]
+    }
+
+    /// Clears retained candidates while preserving caller-owned storage.
+    pub fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    fn push(&mut self, candidate: u32) -> Result<(), R4G1Error> {
+        if self.len >= CAPACITY {
+            return Err(R4G1Error::RouteCapacityExceeded);
+        }
+        self.entries[self.len] = candidate;
+        self.len += 1;
+        Ok(())
+    }
+}
+
+impl<const CAPACITY: usize> Default for R4G1RouteCandidates<CAPACITY> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Caller-owned bounded EMIT entries returned for one R4G1 node.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct R4G1Emissions<const CAPACITY: usize> {
+    entries: [R4G1Emission; CAPACITY],
+    len: usize,
+}
+
+impl<const CAPACITY: usize> R4G1Emissions<CAPACITY> {
+    /// Creates an empty emission result.
+    pub const fn new() -> Self {
+        Self {
+            entries: [R4G1Emission {
+                token: 0,
+                score_q: 0,
+            }; CAPACITY],
+            len: 0,
+        }
+    }
+
+    /// Returns decoded entries in their canonical wire order.
+    pub fn as_slice(&self) -> &[R4G1Emission] {
+        &self.entries[..self.len]
+    }
+
+    /// Clears decoded entries while preserving caller-owned storage.
+    pub fn clear(&mut self) {
+        self.len = 0;
+    }
+
+    fn push(&mut self, entry: R4G1Emission) -> Result<(), R4G1Error> {
+        if self.len >= CAPACITY {
+            return Err(R4G1Error::EmissionCapacityExceeded);
+        }
+        self.entries[self.len] = entry;
+        self.len += 1;
+        Ok(())
+    }
+}
+
+impl<const CAPACITY: usize> Default for R4G1Emissions<CAPACITY> {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl R4G1Section {
@@ -612,6 +740,7 @@ pub struct R4G1Graph<'a> {
     edge_count: u32,
     signature_words: u16,
     depth_count: u8,
+    max_program_steps: u32,
 }
 
 impl<'a> R4G1Graph<'a> {
@@ -719,6 +848,7 @@ impl<'a> R4G1Graph<'a> {
             edge_count,
             signature_words,
             depth_count,
+            max_program_steps: read_u32(head, 192),
         })
     }
 
@@ -740,6 +870,11 @@ impl<'a> R4G1Graph<'a> {
     /// Returns the validated depth count.
     pub const fn depth_count(self) -> u8 {
         self.depth_count
+    }
+
+    /// Returns the HEAD-declared maximum ROUT instruction steps.
+    pub const fn max_program_steps(self) -> u32 {
+        self.max_program_steps
     }
 
     /// Returns the underlying identity view.
@@ -781,6 +916,206 @@ impl<'a> R4G1Graph<'a> {
     /// Returns one borrowed validated section body.
     pub fn section(&self, section: R4G1Section) -> Option<&'a [u8]> {
         self.structure.section(section)
+    }
+
+    /// Executes ROUT v0 and retains candidates whose prototype accepts the signature.
+    ///
+    /// The caller supplies both the signature storage and the bounded output
+    /// buffer. ROUT execution, shortlist decoding, and masked-Hamming checks
+    /// perform no allocation and inspect at most the validated program and
+    /// shortlist ranges.
+    pub fn route<const WORDS: usize, const CAPACITY: usize>(
+        &self,
+        signature: &[u64; WORDS],
+        candidates: &mut R4G1RouteCandidates<CAPACITY>,
+    ) -> Result<(), R4G1Error> {
+        candidates.clear();
+        let provided = if WORDS > usize::from(u16::MAX) {
+            u16::MAX
+        } else {
+            WORDS as u16
+        };
+        if provided != self.signature_words {
+            return Err(R4G1Error::SignatureWidthMismatch {
+                provided,
+                expected: self.signature_words,
+            });
+        }
+        let rout = self
+            .structure
+            .section(R4G1Section::Rout)
+            .ok_or(R4G1Error::SectionTooShort {
+                section: R4G1Section::Rout,
+            })?;
+        let table_start = route_table_start(rout)?;
+        let table = rout
+            .get(table_start..)
+            .ok_or(R4G1Error::RoutingTableMalformed)?;
+        let mut pc = 0usize;
+        let mut steps = 0u32;
+        while pc < table_start {
+            if steps >= self.max_program_steps {
+                return Err(R4G1Error::RoutingProgramTooDeep {
+                    ops: steps,
+                    max: self.max_program_steps,
+                });
+            }
+            steps = steps.saturating_add(1);
+            let opcode = rout[pc];
+            match opcode {
+                ROUT_OP_HALT => return self.route_table(table, signature, candidates),
+                ROUT_OP_TEST_POPCOUNT_LE => {
+                    let word = usize::from(rout[pc + 1]);
+                    let mask = read_u64(rout, pc + 2);
+                    let threshold = read_u16(rout, pc + 10);
+                    let popcount = (signature[word] & mask).count_ones() as u16;
+                    pc += 12;
+                    if popcount > threshold && pc < table_start {
+                        pc = pc
+                            .checked_add(route_op_size(rout[pc])?)
+                            .ok_or(R4G1Error::RoutingProgramUnterminated)?;
+                    }
+                }
+                ROUT_OP_JMP_FWD => {
+                    let delta = usize::from(read_u16(rout, pc + 1));
+                    pc += 3;
+                    let mut skipped = 0usize;
+                    while skipped < delta {
+                        if pc >= table_start {
+                            return Err(R4G1Error::RoutingProgramUnterminated);
+                        }
+                        pc = pc
+                            .checked_add(route_op_size(rout[pc])?)
+                            .ok_or(R4G1Error::RoutingProgramUnterminated)?;
+                        skipped += 1;
+                    }
+                }
+                ROUT_OP_LEAF => {
+                    let start = usize::try_from(read_u32(rout, pc + 1))
+                        .map_err(|_| R4G1Error::RangeOverflow)?;
+                    let length = usize::from(read_u16(rout, pc + 5));
+                    let end = start
+                        .checked_add(length)
+                        .ok_or(R4G1Error::RoutingTableMalformed)?;
+                    let shortlist = table
+                        .get(start..end)
+                        .ok_or(R4G1Error::RoutingTableMalformed)?;
+                    return self.route_table(shortlist, signature, candidates);
+                }
+                _ => {
+                    return Err(R4G1Error::UnknownRoutingOp {
+                        offset: u32::try_from(pc).unwrap_or(u32::MAX),
+                        opcode,
+                    });
+                }
+            }
+        }
+        self.route_table(table, signature, candidates)
+    }
+
+    /// Reads one node's fixed-point EMIT entries into caller-owned storage.
+    pub fn node_emissions<const CAPACITY: usize>(
+        &self,
+        node_index: u32,
+        emissions: &mut R4G1Emissions<CAPACITY>,
+    ) -> Result<(), R4G1Error> {
+        emissions.clear();
+        let node = self
+            .node(node_index)
+            .ok_or(R4G1Error::NodeOutOfBounds { node: node_index })?;
+        let emit = self
+            .structure
+            .section(R4G1Section::Emit)
+            .ok_or(R4G1Error::SectionTooShort {
+                section: R4G1Section::Emit,
+            })?;
+        validate_emission_encoding(emit)?;
+        let start = 4usize
+            .checked_add(
+                usize::try_from(node.emission_start).map_err(|_| R4G1Error::RangeOverflow)?,
+            )
+            .ok_or(R4G1Error::RangeOverflow)?;
+        let byte_len = usize::from(node.emission_len)
+            .checked_shl(3)
+            .ok_or(R4G1Error::RangeOverflow)?;
+        let end = start
+            .checked_add(byte_len)
+            .ok_or(R4G1Error::RangeOverflow)?;
+        let bytes = emit
+            .get(start..end)
+            .ok_or(R4G1Error::NodeRangeOutOfBounds {
+                node: node_index,
+                field: R4G1RangeField::Emission,
+            })?;
+        let mut offset = 0usize;
+        while offset < bytes.len() {
+            let token = read_u32(bytes, offset);
+            let raw_score = read_i32(bytes, offset + 4);
+            emissions.push(R4G1Emission {
+                token,
+                score_q: decode_score(raw_score, emit[1], read_i16(emit, 2))?,
+            })?;
+            offset += 8;
+        }
+        Ok(())
+    }
+
+    fn route_table<const WORDS: usize, const CAPACITY: usize>(
+        &self,
+        table: &[u8],
+        signature: &[u64; WORDS],
+        candidates: &mut R4G1RouteCandidates<CAPACITY>,
+    ) -> Result<(), R4G1Error> {
+        if table.len() & 3 != 0 {
+            return Err(R4G1Error::RoutingTableMalformed);
+        }
+        let mut offset = 0usize;
+        while offset < table.len() {
+            let candidate = read_u32(table, offset);
+            if candidate >= self.node_count {
+                return Err(R4G1Error::RoutingCandidateOutOfBounds { candidate });
+            }
+            let node = self
+                .node(candidate)
+                .ok_or(R4G1Error::RoutingCandidateOutOfBounds { candidate })?;
+            if self.node_accepts(signature, node)? {
+                candidates.push(candidate)?;
+            }
+            offset += 4;
+        }
+        Ok(())
+    }
+
+    fn node_accepts<const WORDS: usize>(
+        &self,
+        signature: &[u64; WORDS],
+        node: R4G1Node,
+    ) -> Result<bool, R4G1Error> {
+        let rout = self
+            .structure
+            .section(R4G1Section::Rout)
+            .ok_or(R4G1Error::SectionTooShort {
+                section: R4G1Section::Rout,
+            })?;
+        let prototype = usize::try_from(node.prototype_word_start)
+            .map_err(|_| R4G1Error::RangeOverflow)?
+            .checked_shl(3)
+            .ok_or(R4G1Error::RangeOverflow)?;
+        let mask = usize::try_from(node.mask_word_start)
+            .map_err(|_| R4G1Error::RangeOverflow)?
+            .checked_shl(3)
+            .ok_or(R4G1Error::RangeOverflow)?;
+        let mut distance = 0u16;
+        let mut word = 0usize;
+        while word < WORDS {
+            let prototype_word = read_u64(rout, prototype_offset(prototype, word)?);
+            let mask_word = read_u64(rout, prototype_offset(mask, word)?);
+            distance = distance.saturating_add(
+                ((signature[word] ^ prototype_word) & mask_word).count_ones() as u16,
+            );
+            word += 1;
+        }
+        Ok(distance <= node.radius)
     }
 }
 
@@ -1261,12 +1596,73 @@ fn section_table_end(section_count: u32, available: usize) -> Result<usize, R4G1
     Ok(end)
 }
 
+fn route_table_start(bytes: &[u8]) -> Result<usize, R4G1Error> {
+    let mut offset = 0usize;
+    while offset < bytes.len() {
+        let opcode = bytes[offset];
+        let size = route_op_size(opcode)?;
+        let end = offset.checked_add(size).ok_or(R4G1Error::RangeOverflow)?;
+        if end > bytes.len() {
+            return Err(R4G1Error::TruncatedRoutingOp {
+                offset: u32::try_from(offset).unwrap_or(u32::MAX),
+                opcode,
+            });
+        }
+        offset = end;
+        if opcode == ROUT_OP_HALT {
+            return Ok(offset);
+        }
+    }
+    Ok(offset)
+}
+
+fn route_op_size(opcode: u8) -> Result<usize, R4G1Error> {
+    match rout_op_size(opcode) {
+        Some(size) => Ok(size),
+        None => Err(R4G1Error::UnknownRoutingOp { offset: 0, opcode }),
+    }
+}
+
+fn prototype_offset(base: usize, word: usize) -> Result<usize, R4G1Error> {
+    base.checked_add(word.checked_shl(3).ok_or(R4G1Error::RangeOverflow)?)
+        .ok_or(R4G1Error::RangeOverflow)
+}
+
+fn validate_emission_encoding(bytes: &[u8]) -> Result<(), R4G1Error> {
+    if bytes.len() < 4 || bytes[0] != 2 {
+        return Err(R4G1Error::EmissionEncodingUnsupported);
+    }
+    Ok(())
+}
+
+fn decode_score(raw: i32, shift_byte: u8, zero_point: i16) -> Result<i32, R4G1Error> {
+    let shift = shift_byte as i8;
+    let adjusted = if shift >= 0 {
+        match raw.checked_shl(u32::from(shift as u8)) {
+            Some(value) => value,
+            None if raw.is_negative() => i32::MIN,
+            None => i32::MAX,
+        }
+    } else {
+        match raw.checked_shr(u32::from(shift.saturating_neg() as u8)) {
+            Some(value) => value,
+            None if raw.is_negative() => -1,
+            None => 0,
+        }
+    };
+    Ok(adjusted.saturating_add(i32::from(zero_point)))
+}
+
 fn read_u32(bytes: &[u8], at: usize) -> u32 {
     u32::from_le_bytes([bytes[at], bytes[at + 1], bytes[at + 2], bytes[at + 3]])
 }
 
 fn read_u16(bytes: &[u8], at: usize) -> u16 {
     u16::from_le_bytes([bytes[at], bytes[at + 1]])
+}
+
+fn read_i16(bytes: &[u8], at: usize) -> i16 {
+    i16::from_le_bytes([bytes[at], bytes[at + 1]])
 }
 
 fn read_i32(bytes: &[u8], at: usize) -> i32 {

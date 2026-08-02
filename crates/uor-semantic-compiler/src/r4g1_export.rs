@@ -1,13 +1,13 @@
 //! Canonical structural R4G1 export for compiled semantic artifacts.
 //!
-//! This bridge deliberately emits the bounded container shape and valid
-//! BLAKE3 identities, not a scored R4G1 certificate. The emitted EMIT root
-//! prior and RX1-framed EXCT table are structural evidence derived from the
-//! semantic artifact; their synthetic route-code keys are not target graded
-//! codes and therefore do not claim scored R4G1 equivalence. Predictive
-//! kind-2 edges are emitted only from deterministic continuation evidence. The
-//! replay certificate below checks this exporter/source boundary, not target
-//! runtime equivalence.
+//! This bridge emits the bounded container shape, executable fallback ROUT
+//! shortlist, and valid BLAKE3 identities, not a scored R4G1 certificate. The
+//! emitted EMIT root prior and RX1-framed EXCT table are structural evidence
+//! derived from the semantic artifact; their synthetic route-code keys are not
+//! target graded codes and therefore do not claim scored R4G1 equivalence.
+//! Predictive kind-2 edges are emitted only from deterministic continuation
+//! evidence. The replay certificate below checks this exporter/source
+//! boundary, not target runtime equivalence.
 
 use core::fmt;
 use std::collections::BTreeMap;
@@ -322,6 +322,22 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
     let mut region_emit = Vec::new();
     let mut root_scores: BTreeMap<u32, (i64, u32)> = BTreeMap::new();
     let mut nodes = Vec::with_capacity(node_count);
+    let shortlist_words = u32::try_from(region_count)
+        .map_err(|_| R4G1ExportError::FormatLimit("ROUT shortlist count exceeds u32"))?;
+    let route_table_word_start = 1u32;
+    let prototype_word_base =
+        route_table_word_start
+            .checked_add(shortlist_words)
+            .ok_or(R4G1ExportError::FormatLimit(
+                "ROUT prototype offset overflow",
+            ))?;
+    let mask_word_base = prototype_word_base
+        .checked_add(
+            node_count_u32
+                .checked_mul(SIGNATURE_WORDS as u32)
+                .ok_or(R4G1ExportError::FormatLimit("ROUT mask offset overflow"))?,
+        )
+        .ok_or(R4G1ExportError::FormatLimit("ROUT mask offset overflow"))?;
     nodes.push(Node {
         child_start: 0,
         child_len: 0,
@@ -329,8 +345,8 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
         forward_len: 0,
         emission_start: 0,
         emission_len: 0,
-        prototype_word_start: 1,
-        mask_word_start: 1 + node_count_u32 * SIGNATURE_WORDS as u32,
+        prototype_word_start: prototype_word_base,
+        mask_word_start: mask_word_base,
         radius: 0,
         depth: 0,
         path: [0; 8],
@@ -391,7 +407,7 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
         }
         max_emissions = max_emissions.max(u32::try_from(emission_len).unwrap_or(u32::MAX));
 
-        let prototype_word_start = 1u32
+        let prototype_word_start = prototype_word_base
             .checked_add(
                 u32::try_from(region_index + 1)
                     .map_err(|_| R4G1ExportError::FormatLimit("node index exceeds u32"))?
@@ -400,11 +416,10 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
             .ok_or(R4G1ExportError::FormatLimit(
                 "ROUT prototype offset overflow",
             ))?;
-        let mask_word_start = 1u32
+        let mask_word_start = mask_word_base
             .checked_add(
-                node_count_u32
-                    .checked_add(u32::try_from(region_index + 1).unwrap_or(u32::MAX))
-                    .ok_or(R4G1ExportError::FormatLimit("ROUT mask offset overflow"))?
+                u32::try_from(region_index + 1)
+                    .map_err(|_| R4G1ExportError::FormatLimit("node index exceeds u32"))?
                     .saturating_mul(SIGNATURE_WORDS as u32),
             )
             .ok_or(R4G1ExportError::FormatLimit("ROUT mask offset overflow"))?;
@@ -554,15 +569,30 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
     }
 
     let rout_words = 1usize
-        .checked_add(
-            node_count
-                .checked_mul(SIGNATURE_WORDS)
-                .ok_or(R4G1ExportError::FormatLimit("ROUT word count overflow"))?,
-        )
+        .checked_add(region_count)
+        .and_then(|words| words.checked_add(node_count.checked_mul(SIGNATURE_WORDS)?))
         .and_then(|words| words.checked_add(node_count.checked_mul(SIGNATURE_WORDS)?))
         .ok_or(R4G1ExportError::FormatLimit("ROUT word count overflow"))?;
     let mut rout = vec![0u8; rout_words * 8];
-    rout[0] = 0;
+    rout[0] = 3;
+    rout[5..7].copy_from_slice(
+        &u16::try_from(
+            region_count
+                .checked_mul(4)
+                .ok_or(R4G1ExportError::FormatLimit("ROUT shortlist size overflow"))?,
+        )
+        .map_err(|_| R4G1ExportError::FormatLimit("ROUT shortlist exceeds u16"))?
+        .to_le_bytes(),
+    );
+    rout[7] = 0;
+    let mut shortlist_index = 0usize;
+    while shortlist_index < region_count {
+        let offset = 8 + shortlist_index * 4;
+        let node_id = u32::try_from(shortlist_index + 1)
+            .map_err(|_| R4G1ExportError::FormatLimit("ROUT node ID exceeds u32"))?;
+        rout[offset..offset + 4].copy_from_slice(&node_id.to_le_bytes());
+        shortlist_index += 1;
+    }
     for (index, node) in nodes.iter().enumerate() {
         let source_start = if index == 0 {
             None
@@ -629,7 +659,7 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
     put_u16(&mut head, 184, SIGNATURE_WORDS as u16);
     put_u16(&mut head, 186, 1);
     put_u32(&mut head, 188, max_emissions.max(1));
-    put_u32(&mut head, 192, 1);
+    put_u32(&mut head, 192, 2);
     put_u32(&mut head, 196, node_count_u32);
     put_u32(&mut head, 200, edge_count);
     head[204] = depth_count;

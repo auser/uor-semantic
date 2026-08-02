@@ -158,7 +158,11 @@ the interchange boundary, and `compile`/`model compile` can write it with
 `--r4g1-output`. It emits structural refinement and bounded predictive kind-2
 edges, a target-framed EMIT root prior, and an RX1-framed EXCT table from
 synthetic route-code projections.
-It is not scored R4G1 equivalence: target graded codes, predictive scoring
+The ROUT section is executable by the published no-heap graph view: it routes
+through a bounded shortlist, applies masked-Hamming prototype checks, and
+returns candidates through caller-owned storage; the same view decodes the
+fixed-point EMIT entries for a selected node. It is not scored R4G1 equivalence:
+target graded codes, predictive scoring
 certificates, and target replay parity remain future work. The repository now
 provides `artifact replay <artifact> --r4g1 <container>` as a bounded exporter
 replay certificate: it recomputes source predictive transitions and reports

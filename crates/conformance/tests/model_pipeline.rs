@@ -8,10 +8,10 @@ use uor_semantic::{
     ArtifactError, ArtifactPredictScratch, ArtifactView, CodebookId, CompatibilityError,
     CompatibilityFormat, CompatibilityManifest, CompatibilityPrediction, CompatibilityWitness,
     Depth, ExactPolicy, GenerationState, MAX_EMISSION_RECORDS, MAX_EXACT_RECORDS,
-    MAX_REGION_RECORDS, Prediction, PredictionSource, R4G1Error, R4G1Graph, R4G1Identity,
-    R4G1RangeField, R4G1Section, R4G1Structure, R4Status, ResidualContribution,
-    ResidualContributionKind, ScoreAccumulator, ScoreQ, ScoringError, TokenScore,
-    context_signature, generate_greedy_into,
+    MAX_REGION_RECORDS, Prediction, PredictionSource, R4G1Emissions, R4G1Error, R4G1Graph,
+    R4G1Identity, R4G1RangeField, R4G1RouteCandidates, R4G1Section, R4G1Structure, R4Status,
+    ResidualContribution, ResidualContributionKind, ScoreAccumulator, ScoreQ, ScoringError,
+    TokenScore, context_signature, generate_greedy_into,
 };
 use uor_semantic_cli::{
     CaptureOptions, CompileRequest as CliCompileRequest, DownloadRequest, SourceCompileRequest,
@@ -1380,4 +1380,27 @@ fn r4g1_replay_certificate_reports_predictive_score_agreement_cx_20() {
     );
     assert_eq!(tampered_report.score_matches, 0);
     assert!(!tampered_report.is_complete());
+}
+
+#[test]
+fn r4g1_runtime_replays_route_and_emit_without_allocation_cx_21() {
+    let compiled = compile(&train(), CompilerConfig::accuracy()).expect("fixture compiles");
+    let exported = export_r4g1(&compiled).expect("structural R4G1 export succeeds");
+    let graph = R4G1Graph::parse(&exported.bytes).expect("exported graph validates");
+    let signature = context_signature(&[1, 2]);
+    let mut candidates = R4G1RouteCandidates::<8>::new();
+
+    graph
+        .route(&signature, &mut candidates)
+        .expect("ROUT execution succeeds");
+    assert!(!candidates.as_slice().is_empty());
+    assert!(candidates.as_slice().iter().all(|&node| node > 0));
+
+    let mut emissions = R4G1Emissions::<4>::new();
+    graph
+        .node_emissions(candidates.as_slice()[0], &mut emissions)
+        .expect("EMIT decoding succeeds");
+    assert!(!emissions.as_slice().is_empty());
+    assert_eq!(emissions.as_slice()[0].token, 3);
+    assert!(emissions.as_slice()[0].score_q <= 0);
 }

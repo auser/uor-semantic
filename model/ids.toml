@@ -365,3 +365,9 @@ id = "CX-20"
 level = "build"
 suite = "compatibility"
 statement = "A bounded R4G1 replay certificate recomputes predictive transitions from the validated artifact, reports emitted-edge coverage and fixed-point score agreement, and does not claim target replay equivalence."
+
+[[id]]
+id = "CX-21"
+level = "build"
+suite = "compatibility"
+statement = "The no_std R4G1 graph view executes bounded ROUT v0 shortlists, filters candidates by masked Hamming distance, and decodes caller-buffered fixed-point EMIT entries without heap allocation."
