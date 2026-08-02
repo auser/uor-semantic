@@ -329,3 +329,9 @@ id = "CX-14"
 level = "build"
 suite = "compatibility"
 statement = "The compiler emits a deterministic structural R4G1 container with canonical section layout and valid BLAKE3 HEAD and artifact CIDs."
+
+[[id]]
+id = "CX-15"
+level = "build"
+suite = "compatibility"
+statement = "The CLI compile commands write the validated `.uors` artifact and an optional structural R4G1 container through a typed output path."

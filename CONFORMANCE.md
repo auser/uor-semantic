@@ -56,6 +56,7 @@ lowercased ID.
 | `CX-12` | `build` | Typed source compilation validates the local model and corpus before invoking the Python teacher bridge, then emits a validated artifact and parity report. |
 | `CX-13` | `build` | The borrowed R4G1 graph view validates ROUT v0 opcodes, termination, jumps, signature-word operands, and shortlist ranges against HEAD bounds. |
 | `CX-14` | `build` | The compiler emits a deterministic structural R4G1 container with canonical section layout and valid BLAKE3 HEAD and artifact CIDs. |
+| `CX-15` | `build` | The CLI compile commands write the validated `.uors` artifact and an optional structural R4G1 container through a typed output path. |
 
 ## compiler
 

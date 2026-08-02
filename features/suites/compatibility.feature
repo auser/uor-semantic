@@ -83,3 +83,9 @@ Feature: R4G1 and TLA5 compatibility bridge
     Given a validated compiled semantic artifact
     When it is exported through the R4G1 compatibility bridge
     Then the borrowed graph view accepts its sections and both BLAKE3 CIDs verify
+
+  @CX-15 @build
+  Scenario: CLI compilation writes an optional R4G1 container
+    Given a valid observation corpus and `.uors` output path
+    When the CLI compile command receives `--r4g1-output`
+    Then it writes both validated artifact formats and reports the R4G1 identity

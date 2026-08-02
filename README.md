@@ -143,7 +143,8 @@ top-level command aliases are:
 
 ./target/release/uor-semantic compile \
   .uor-models/smollm2-135m/observations.uorobs \
-  --output .uor-models/smollm2-135m/model.uors
+  --output .uor-models/smollm2-135m/model.uors \
+  --r4g1-output .uor-models/smollm2-135m/model.r4g1
 ```
 
 `model build` remains the end-to-end source-download, teacher-capture,
@@ -153,9 +154,9 @@ artifact. `compile_source` performs the same source-side orchestration from a
 verified local Hugging Face snapshot and a construction corpus. The compiler
 also exposes `export_r4g1` for a deterministic structural R4G1 container with
 canonical aligned sections and verified BLAKE3 HEAD and artifact CIDs. This is
-the interchange boundary, not scored R4G1 equivalence: forward/refinement
-edges, residual EXCT evidence, and target scoring certificates remain future
-work.
+the interchange boundary, and `compile`/`model compile` can write it with
+`--r4g1-output`. It is not scored R4G1 equivalence: forward/refinement edges,
+residual EXCT evidence, and target scoring certificates remain future work.
 
 ## Hugging Face model pipeline
 

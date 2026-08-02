@@ -14,8 +14,8 @@ use uor_semantic::{
 };
 use uor_semantic_compiler::{
     CompiledArtifact, CompilerConfig, MAX_ROLLOUT_TOKENS, ObservationCorpus, ParityReport,
-    ParityThresholds, RolloutCorpus, compile as compile_observations, evaluate,
-    evaluate_graph_only, evaluate_rollouts,
+    ParityThresholds, R4G1Export, R4G1ExportError, RolloutCorpus, compile as compile_observations,
+    evaluate, evaluate_graph_only, evaluate_rollouts, export_r4g1 as export_compiled_r4g1,
 };
 
 const CAPTURE_SCRIPT: &str = include_str!("../../../scripts/capture_hf.py");
@@ -42,6 +42,8 @@ pub enum CliError {
     Artifact(uor_semantic::ArtifactError),
     /// Generation state or execution failed.
     Generation(uor_semantic::GenerationError),
+    /// Structural R4G1 export failed.
+    R4G1Export(R4G1ExportError),
     /// An external command exited unsuccessfully.
     ProcessFailed {
         /// Program that failed.
@@ -85,6 +87,7 @@ impl fmt::Display for CliError {
             Self::Rollout(error) => write!(formatter, "rollout error: {error}"),
             Self::Artifact(error) => write!(formatter, "artifact error: {error}"),
             Self::Generation(error) => write!(formatter, "generation error: {error}"),
+            Self::R4G1Export(error) => write!(formatter, "R4G1 export error: {error}"),
             Self::ProcessFailed {
                 program,
                 code,
@@ -158,6 +161,12 @@ impl From<uor_semantic::ArtifactError> for CliError {
 impl From<uor_semantic::GenerationError> for CliError {
     fn from(error: uor_semantic::GenerationError) -> Self {
         Self::Generation(error)
+    }
+}
+
+impl From<R4G1ExportError> for CliError {
+    fn from(error: R4G1ExportError) -> Self {
+        Self::R4G1Export(error)
     }
 }
 
@@ -412,7 +421,7 @@ fn print_help() {
         "      --model-id <repo> --revision <40-hex> [--top-k <n>]\n",
         "      [--max-context <n>] [--max-samples <n>] [--python <path>]\n",
         "      [--rollout-tokens <n>] [--rollout-output <uoroll>]\n",
-        "  model compile <uorobs> --output <artifact> [--regions <n>]\n",
+        "  model compile <uorobs> --output <artifact> [--r4g1-output <container>] [--regions <n>]\n",
         "      [--iterations <n>] [--overlap-margin <n>] [--region-top-k <n>]\n",
         "      [--without-exact]\n",
         "  model parity <artifact> --observations <uorobs>\n",
@@ -426,7 +435,7 @@ fn print_help() {
         "      --max-tokens <n> [--python <path>]\n",
         "\nCompatibility aliases matching the R4 lifecycle surface:\n",
         "  download --repository <repo> --revision <40-hex> --name <name> [--output <dir>]\n",
-        "  compile <uorobs> --output <artifact> [compiler options]\n"
+        "  compile <uorobs> --output <artifact> [--r4g1-output <container>] [compiler options]\n"
     ));
 }
 
@@ -449,12 +458,18 @@ fn command_download(arguments: &[String]) -> Result<(), CliError> {
 fn command_compile(arguments: &[String]) -> Result<(), CliError> {
     let observations = PathBuf::from(required_positional(arguments, 0, "observation file")?);
     let output = PathBuf::from(required_option(arguments, "--output")?);
+    let r4g1_output = option_value(arguments, "--r4g1-output").map(PathBuf::from);
     let request = CompileRequest {
         observations,
         output,
         config: compiler_config(arguments)?,
     };
     let artifact = compile(&request)?;
+    if let Some(r4g1_output) = r4g1_output.as_deref() {
+        let exported = export_r4g1(&artifact, r4g1_output)?;
+        println!("r4g1: {}", r4g1_output.display());
+        println!("r4g1_artifact_cid: {}", hex(&exported.artifact_cid));
+    }
     println!("codebook_id: {}", hex(artifact.codebook_id.as_bytes()));
     println!("observations: {}", artifact.observations);
     println!("bytes: {}", artifact.bytes.len());
@@ -540,8 +555,9 @@ fn command_model(arguments: &[String]) -> Result<(), CliError> {
             let observations =
                 PathBuf::from(required_positional(arguments, 1, "observation file")?);
             let output = PathBuf::from(required_option(arguments, "--output")?);
+            let r4g1_output = option_value(arguments, "--r4g1-output").map(PathBuf::from);
             let config = compiler_config(arguments)?;
-            model_compile(&observations, &output, config)
+            model_compile(&observations, &output, r4g1_output.as_deref(), config)
         }
         "parity" => {
             let artifact = PathBuf::from(required_positional(arguments, 1, "artifact file")?);
@@ -794,6 +810,7 @@ fn model_capture(
 fn model_compile(
     observations: &Path,
     output: &Path,
+    r4g1_output: Option<&Path>,
     config: CompilerConfig,
 ) -> Result<(), CliError> {
     let artifact = compile(&CompileRequest {
@@ -801,6 +818,9 @@ fn model_compile(
         output: output.to_owned(),
         config,
     })?;
+    let exported = r4g1_output
+        .map(|path| export_r4g1(&artifact, path))
+        .transpose()?;
     println!("artifact: {}", output.display());
     println!("codebook_id: {}", hex(artifact.codebook_id.as_bytes()));
     println!("observations: {}", artifact.observations);
@@ -809,6 +829,10 @@ fn model_compile(
     println!("region_memberships: {}", artifact.memberships);
     println!("emissions: {}", artifact.emissions);
     println!("bytes: {}", artifact.bytes.len());
+    if let (Some(path), Some(exported)) = (r4g1_output, exported) {
+        println!("r4g1: {}", path.display());
+        println!("r4g1_artifact_cid: {}", hex(&exported.artifact_cid));
+    }
     Ok(())
 }
 
@@ -821,6 +845,16 @@ pub fn compile(request: &CompileRequest) -> Result<CompiledArtifact, CliError> {
     }
     std::fs::write(&request.output, &artifact.bytes)?;
     Ok(artifact)
+}
+
+/// Exports a validated compiled artifact to a structural R4G1 container.
+pub fn export_r4g1(artifact: &CompiledArtifact, output: &Path) -> Result<R4G1Export, CliError> {
+    let exported = export_compiled_r4g1(artifact)?;
+    if let Some(parent) = output.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(output, &exported.bytes)?;
+    Ok(exported)
 }
 
 /// Captures a verified local teacher source, compiles its observations, and
@@ -1012,7 +1046,7 @@ where
             plan.held_out_rollouts.as_deref(),
         )?;
     }
-    model_compile(&plan.observations, &plan.artifact, plan.config)?;
+    model_compile(&plan.observations, &plan.artifact, None, plan.config)?;
     model_parity(
         &plan.artifact,
         &plan.observations,

@@ -15,6 +15,7 @@ use uor_semantic::{
 use uor_semantic_cli::{
     CaptureOptions, CompileRequest as CliCompileRequest, DownloadRequest, SourceCompileRequest,
     compile as cli_compile, compile_source, download as cli_download, download_arguments,
+    export_r4g1 as cli_export_r4g1, run as cli_run,
 };
 use uor_semantic_compiler::{
     CompilerConfig, Observation, ObservationCorpus, ObservationMetadata, ObservedEmission,
@@ -1103,4 +1104,45 @@ fn compiled_artifact_exports_to_structural_r4g1_with_valid_cids_cx_14() {
             "artifact"
         ))
     ));
+}
+
+#[test]
+fn cli_compile_writes_optional_structural_r4g1_container_cx_15() {
+    let root = std::env::temp_dir().join(format!("uor-semantic-cli-r4g1-{}", std::process::id()));
+    let observations = root.join("observations.uorobs");
+    let artifact = root.join("compiled/model.uors");
+    let r4g1 = root.join("compiled/model.r4g1");
+    fs::create_dir_all(&root).expect("CLI fixture directory creates");
+    fs::write(&observations, TRAIN).expect("observation fixture writes");
+
+    let arguments = [
+        "compile".to_owned(),
+        observations.display().to_string(),
+        "--output".to_owned(),
+        artifact.display().to_string(),
+        "--r4g1-output".to_owned(),
+        r4g1.display().to_string(),
+    ];
+    cli_run(&arguments).expect("CLI compile with R4G1 output succeeds");
+
+    assert!(artifact.is_file());
+    assert!(r4g1.is_file());
+    let bytes = fs::read(&r4g1).expect("R4G1 output reads");
+    let graph = R4G1Graph::parse(&bytes).expect("CLI R4G1 output validates");
+    verify_r4g1_cids(&bytes).expect("CLI R4G1 CIDs verify");
+    assert_eq!(graph.node_count(), 4);
+
+    let compiled = cli_compile(&CliCompileRequest {
+        observations,
+        output: root.join("typed/model.uors"),
+        config: CompilerConfig::accuracy(),
+    })
+    .expect("typed compile succeeds");
+    let typed_output = root.join("typed/model.r4g1");
+    let typed_export =
+        cli_export_r4g1(&compiled, &typed_output).expect("typed R4G1 export succeeds");
+    assert_eq!(
+        fs::read(typed_output).expect("typed R4G1 output reads"),
+        typed_export.bytes
+    );
 }
