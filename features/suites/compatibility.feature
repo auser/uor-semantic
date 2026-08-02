@@ -107,3 +107,9 @@ Feature: R4G1 and TLA5 compatibility bridge
     Given signed fixed-point residual contributions and candidate IDs
     When compatibility scoring accumulates evidence
     Then saturation, duplicate suppression, capacity errors, and tie-breaking remain explicit
+
+  @CX-19 @build
+  Scenario: R4G1 carries bounded predictive transition edges
+    Given exact contexts with deterministic next-context continuations
+    When a structural R4G1 container is exported
+    Then kind-2 predictive edges carry fixed-point scores and refinement ranges remain valid

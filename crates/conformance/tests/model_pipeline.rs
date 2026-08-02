@@ -1090,14 +1090,23 @@ fn compiled_artifact_exports_to_structural_r4g1_with_valid_cids_cx_14() {
 
     assert_eq!(graph.node_count(), exported.node_count);
     assert_eq!(graph.edge_count(), exported.edge_count);
-    assert_eq!(graph.edge_count(), 3);
+    let mut refinement_edges = 0u32;
+    let mut predictive_edges = 0u32;
     assert!(graph.node(0).is_some_and(|node| node.child_len > 0));
     for edge_index in 0..graph.edge_count() {
         let edge = graph.edge(edge_index).expect("exported edge exists");
-        assert_eq!(edge.kind, 0);
-        assert!(edge.src < edge.dst);
+        match edge.kind {
+            0 => {
+                refinement_edges += 1;
+                assert!(edge.src < edge.dst);
+            }
+            2 => predictive_edges += 1,
+            kind => panic!("unexpected exported edge kind {kind}"),
+        }
         assert!(graph.reverse_edge_id(edge_index).is_some());
     }
+    assert_eq!(refinement_edges, 3);
+    assert!(predictive_edges > 0);
     assert_eq!(
         graph.identity().artifact_id().as_bytes(),
         &exported.artifact_cid
@@ -1293,4 +1302,32 @@ fn r4g1_scoring_accumulates_unique_residuals_with_deterministic_ties_cx_18() {
         ScoreAccumulator::<2>::compare_candidates(51, 9, 50, 1),
         core::cmp::Ordering::Less
     );
+}
+
+#[test]
+fn r4g1_export_emits_predictive_edges_with_refinement_ranges_cx_19() {
+    let compiled = compile(&train(), CompilerConfig::accuracy()).expect("fixture compiles");
+    let exported = export_r4g1(&compiled).expect("structural R4G1 export succeeds");
+    let graph = R4G1Graph::parse(&exported.bytes).expect("exported graph validates");
+    let mut predictive = 0u32;
+    for edge_index in 0..graph.edge_count() {
+        let edge = graph.edge(edge_index).expect("edge exists");
+        if edge.kind == 2 {
+            predictive += 1;
+            assert!(graph.reverse_edge_id(edge_index).is_some());
+        }
+    }
+    assert!(predictive > 0);
+
+    for node_index in 0..graph.node_count() {
+        let node = graph.node(node_index).expect("node exists");
+        let end = node.child_start + u32::from(node.child_len);
+        let mut edge_index = node.child_start;
+        while edge_index < end {
+            let edge = graph.edge(edge_index).expect("child edge exists");
+            assert_eq!(edge.kind, 0);
+            assert_eq!(edge.src, node_index);
+            edge_index += 1;
+        }
+    }
 }

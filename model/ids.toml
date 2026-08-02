@@ -353,3 +353,9 @@ id = "CX-18"
 level = "build"
 suite = "compatibility"
 statement = "The no_std compatibility scorer accumulates signed R4G1 residual contributions with saturation, ignores duplicate evidence IDs, reports fixed-capacity exhaustion, and orders equal-score candidates by ascending ID."
+
+[[id]]
+id = "CX-19"
+level = "build"
+suite = "compatibility"
+statement = "R4G1 export emits bounded predictive kind-2 edges from deterministic exact-context continuations, carrying accumulator-derived fixed-point scores while keeping refinement child ranges valid."
