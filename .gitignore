@@ -1,0 +1,8 @@
+/target/
+/.venv/
+/.uor-models/
+/validation/
+.DS_Store
+*.profraw
+*.profdata
+conformance/reports/*.json

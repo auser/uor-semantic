@@ -1,0 +1,3 @@
+Why does canonical ordering matter when several semantic regions match?
+Explain how a caller-owned buffer bounds a no-std prediction API.
+What should a parity report say when exact lookup is disabled?

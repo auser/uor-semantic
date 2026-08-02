@@ -1,0 +1,9 @@
+uor-semantic
+Copyright 2026 The UOR Foundation
+
+Repository gate structure and selected development tooling are derived from
+UOR-Foundation/template commit 0a1c799338d7db829aa23365e1acf4f9d01ff8b5,
+dual-licensed under MIT or Apache-2.0.
+
+Engineering conventions are informed by auser/rust-best-practices.md revision
+ac2e9cedc9f69d69398de98a0ab38d47c5b5baec.

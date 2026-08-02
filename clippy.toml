@@ -1,0 +1,5 @@
+# Keep Clippy configuration compatible with the pinned Rust 1.97.1 toolchain.
+# Heap, float, unsafe, and forbidden arithmetic policy is enforced at crate
+# scope and by `cargo xtask audit-core`, rather than by unresolved paths in a
+# workspace-wide disallowed-types table.
+msrv = "1.97.1"

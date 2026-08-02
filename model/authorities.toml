@@ -1,0 +1,26 @@
+spec = "uor-semantic/1"
+
+[[authority]]
+id = "AUTH-TEMPLATE"
+name = "UOR Foundation repository template"
+citation = "https://github.com/UOR-Foundation/template at commit 0a1c799338d7db829aa23365e1acf4f9d01ff8b5"
+checksum = "git:0a1c799338d7db829aa23365e1acf4f9d01ff8b5"
+statement = "Source of the repository model, feature-first conformance, xtask, and acceptance-gate structure."
+realized_by = ["CM-01", "CM-02", "CM-03"]
+
+[[authority]]
+id = "AUTH-RUST-PRACTICE"
+name = "Rust Best Practices gist"
+citation = "https://gist.github.com/auser/c3161f55a8393faa8af5ddda68c6befa at revision ac2e9cedc9f69d69398de98a0ab38d47c5b5baec"
+checksum = "git:ac2e9cedc9f69d69398de98a0ab38d47c5b5baec"
+statement = "Design input for strict-core boundaries, bounded execution, explicit errors, tests, documentation, and measurement discipline."
+realized_by = ["RT-01", "RT-02", "PF-01", "PF-02"]
+
+[[authority]]
+id = "AUTH-HF-CLI"
+name = "Hugging Face Hub CLI documentation"
+citation = "https://huggingface.co/docs/huggingface_hub/en/guides/cli"
+checksum = "none"
+checksum_reason = "The official documentation is a maintained web resource; immutable model revisions are enforced by local conformance instead."
+statement = "The official hf CLI exposes the download command with revision and local directory controls."
+realized_by = ["HF-01"]

@@ -1,0 +1,3 @@
+Explain why a bounded semantic artifact can be deterministic.
+Describe how overlapping regions preserve more than one meaning.
+Give a short example of a fixed-capacity generation buffer.

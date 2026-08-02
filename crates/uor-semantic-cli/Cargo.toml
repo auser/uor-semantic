@@ -1,0 +1,22 @@
+[package]
+name = "uor-semantic-cli"
+description = "CLI for testing, compiling, evaluating, and generating with UOR semantic artifacts."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+publish = false
+
+[dependencies]
+uor-semantic = { workspace = true }
+uor-semantic-compiler = { workspace = true }
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "uor-semantic"
+path = "src/main.rs"

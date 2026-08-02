@@ -1,0 +1,19 @@
+[package]
+name = "uor-semantic-compiler"
+description = "Deterministic offline compiler and parity evaluator for UOR semantic artifacts."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+publish = false
+
+[dependencies]
+uor-semantic = { workspace = true }
+
+[lints]
+workspace = true

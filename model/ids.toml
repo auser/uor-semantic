@@ -1,0 +1,307 @@
+spec = "uor-semantic/1"
+
+[[id]]
+id = "CM-01"
+level = "build"
+suite = "model_integrity"
+statement = "CONFORMANCE.md is generated from the checked model registers."
+
+[[id]]
+id = "CM-02"
+level = "build"
+suite = "model_integrity"
+statement = "Every registered capability has a Gherkin scenario and a Rust test named for its ID."
+
+[[id]]
+id = "CM-03"
+level = "build"
+suite = "model_integrity"
+statement = "Every cited authority has a stable citation and revision marker."
+
+[[id]]
+id = "SR-01"
+level = "build"
+suite = "semantic_routing"
+statement = "One context may retain multiple calibrated semantic memberships."
+
+[[id]]
+id = "SR-02"
+level = "build"
+suite = "semantic_routing"
+statement = "Candidate input order does not change canonical route-cloud output."
+
+[[id]]
+id = "SR-03"
+level = "build"
+suite = "semantic_routing"
+statement = "Compiler calibration retains an observation in every prototype region within the deterministic overlap margin."
+
+[[id]]
+id = "SP-01"
+level = "build"
+suite = "divisible_paths"
+statement = "Every initialized path prefix resolves as a valid divisible semantic direction."
+
+[[id]]
+id = "SP-02"
+level = "build"
+suite = "divisible_paths"
+statement = "Compiled region paths are deterministic proximity-derived hierarchies rather than prototype-bit slots."
+
+[[id]]
+id = "RH-01"
+level = "build"
+suite = "semantic_routing"
+statement = "Masked Hamming membership includes observations exactly on the calibrated radius."
+
+[[id]]
+id = "RC-01"
+level = "build"
+suite = "semantic_routing"
+statement = "A full active cloud reports deterministic bounded truncation instead of growing."
+
+[[id]]
+id = "RT-01"
+level = "build"
+suite = "runtime_contract"
+statement = "The shipped core is dependency-free, no_std, safe, heapless, fixed-point, and free of product, quotient, and remainder operators in audited Rust source."
+
+[[id]]
+id = "RT-02"
+level = "build"
+suite = "runtime_contract"
+statement = "A warmed reference routing call performs zero observed heap allocations and deallocations."
+
+[[id]]
+id = "PF-01"
+level = "build"
+suite = "performance"
+statement = "Reference routing remains inside a deterministic operation budget derived from declared capacities."
+
+[[id]]
+id = "PF-02"
+level = "build"
+suite = "performance"
+statement = "The benchmark emits hardware-specific latency observations without asserting a universal wall-clock threshold."
+
+[[id]]
+id = "AC-01"
+level = "build"
+suite = "accuracy"
+statement = "The pinned ambiguity fixture ranks the declared contextual meaning in every registered case."
+
+[[id]]
+id = "AR-01"
+level = "build"
+suite = "artifact"
+statement = "Compiler output is accepted by the zero-copy runtime and preserves exact prediction records."
+
+[[id]]
+id = "AR-02"
+level = "build"
+suite = "artifact"
+statement = "The zero-copy runtime rejects an artifact whose stored codebook identity does not match its bytes."
+
+[[id]]
+id = "AR-03"
+level = "build"
+suite = "artifact"
+statement = "The zero-copy artifact parser rejects declared sections beyond explicit resource limits."
+
+[[id]]
+id = "AR-04"
+level = "build"
+suite = "artifact"
+statement = "Graph prediction probes a serialized bounded candidate index instead of scanning every region."
+
+[[id]]
+id = "GN-01"
+level = "build"
+suite = "generation"
+statement = "Greedy token generation follows a compiled exact-context teacher chain."
+
+[[id]]
+id = "GN-02"
+level = "build"
+suite = "generation"
+statement = "Autoregressive teacher rollouts record EOS and report sequence and EOS-position parity separately."
+
+[[id]]
+id = "HF-01"
+level = "build"
+suite = "huggingface"
+statement = "Hugging Face downloads use the official CLI with an immutable revision and explicit local directory."
+
+[[id]]
+id = "HF-02"
+level = "build"
+suite = "huggingface"
+statement = "Captured Hugging Face teacher observations compile into a runtime-validated semantic artifact."
+
+[[id]]
+id = "HF-04"
+level = "build"
+suite = "huggingface"
+statement = "Model build validates corpus, numeric, work-directory, and bridge inputs before invoking the downloader."
+
+[[id]]
+id = "HF-05"
+level = "build"
+suite = "huggingface"
+statement = "Model build passes a resolved absolute corpus path that remains valid across child working directories."
+
+[[id]]
+id = "HF-06"
+level = "build"
+suite = "huggingface"
+statement = "Capture and parity bind tokenizer files, chat-template, special-token, and EOS identities to the compiled artifact."
+
+[[id]]
+id = "CP-01"
+level = "build"
+suite = "compiler"
+statement = "Canonical compiler inputs and configuration produce byte-identical artifacts."
+
+[[id]]
+id = "CP-02"
+level = "build"
+suite = "compiler"
+statement = "Model build refuses unverified existing work instead of overwriting it implicitly."
+
+[[id]]
+id = "GP-01"
+level = "build"
+suite = "parity"
+statement = "The exact-context lane reproduces captured teacher argmax on every construction fixture observation."
+
+[[id]]
+id = "GP-02"
+level = "build"
+suite = "parity"
+statement = "Parity certification fails whenever a requested exact or graph threshold is not measured."
+
+[[id]]
+id = "GP-03"
+level = "build"
+suite = "parity"
+statement = "Graph-only parity reports top-K recall alongside top-1 agreement."
+
+[[id]]
+id = "GP-04"
+level = "build"
+suite = "parity"
+statement = "Parity certification can require graph coverage and overall top-K recall floors."
+
+[[id]]
+id = "GP-05"
+level = "build"
+suite = "parity"
+statement = "The default accuracy profile uses the cross-validated bounded graph calibration settings."
+
+[[id]]
+id = "GP-06"
+level = "build"
+suite = "parity"
+statement = "The accuracy profile preserves bounded region emissions and indexed graph work."
+
+[[id]]
+id = "AC-02"
+level = "build"
+suite = "accuracy"
+statement = "Graph-only accuracy is evaluated on held-out contexts with exact lookup unavailable."
+
+[[id]]
+id = "AC-03"
+level = "build"
+suite = "accuracy"
+statement = "Separate held-out observations are evaluated with exact-context lookup forcibly disabled."
+
+[[id]]
+id = "AC-04"
+level = "build"
+suite = "accuracy"
+statement = "Graph-only parity reports the bounded indexed candidate work performed during evaluation."
+
+[[id]]
+id = "AC-05"
+level = "build"
+suite = "accuracy"
+statement = "Symmetric graph cross-validation evaluates both construction directions with exact lookup disabled."
+
+[[id]]
+id = "CL-01"
+level = "build"
+suite = "cli"
+statement = "The CLI self-test executes observation parsing, compilation, validation, parity, and generation."
+
+[[id]]
+id = "CL-02"
+level = "build"
+suite = "cli"
+statement = "Interactive artifact inspect, predict, and bounded generate commands succeed on a compiled artifact."
+
+[[id]]
+id = "RT-03"
+level = "build"
+suite = "runtime_contract"
+statement = "Artifact parsing, prediction, and greedy generation perform zero observed heap operations after setup."
+
+[[id]]
+id = "CX-01"
+level = "build"
+suite = "compatibility"
+statement = "A typed R4G1 or TLA5 compatibility manifest binds source, tokenizer, and artifact identities before use."
+
+[[id]]
+id = "CX-02"
+level = "build"
+suite = "compatibility"
+statement = "Compatibility status mapping preserves exact-context, graph, novel, and reserved contradictory outcomes without collapsing them."
+
+[[id]]
+id = "CX-03"
+level = "build"
+suite = "compatibility"
+statement = "A compatibility witness requires the artifact identity, status, selected token, and graph region evidence appropriate to its status."
+
+[[id]]
+id = "CX-04"
+level = "build"
+suite = "compatibility"
+statement = "Compatibility prediction equivalence preserves canonical token-score order, status, and widening state."
+
+[[id]]
+id = "CX-05"
+level = "build"
+suite = "compatibility"
+statement = "The bounded R4G1 identity adapter maps the target header and HEAD identities into a semantic compatibility manifest."
+
+[[id]]
+id = "CX-06"
+level = "build"
+suite = "compatibility"
+statement = "The bounded R4G1 identity adapter rejects truncated, unsupported, mis-sized, unaligned, and head-less containers before exposing identities."
+
+[[id]]
+id = "CX-07"
+level = "build"
+suite = "compatibility"
+statement = "The borrowed R4G1 structure view exposes only canonically ordered containers containing every required graph section."
+
+[[id]]
+id = "CX-08"
+level = "build"
+suite = "compatibility"
+statement = "The R4G1 structure view rejects unknown mandatory sections, missing required sections, and overlapping section bodies."
+
+[[id]]
+id = "CX-09"
+level = "build"
+suite = "compatibility"
+statement = "The borrowed R4G1 graph view validates HEAD bounds and exact NODE/EDGE record lengths before exposing typed records."
+
+[[id]]
+id = "CX-10"
+level = "build"
+suite = "compatibility"
+statement = "R4G1 graph validation rejects node range and depth violations, ROUT word ranges, and out-of-bounds edge endpoints."

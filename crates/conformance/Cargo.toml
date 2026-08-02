@@ -1,0 +1,18 @@
+[package]
+name = "repo-conformance"
+description = "BDD, source-contract, accuracy, allocation, and performance conformance for uor-semantic."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+repo-model = { workspace = true }
+uor-semantic = { workspace = true }
+uor-semantic-compiler = { workspace = true }
+uor-semantic-cli = { workspace = true }
+toml = { workspace = true }
+
+[lints]
+workspace = true
