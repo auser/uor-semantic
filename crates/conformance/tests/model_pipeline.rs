@@ -9,8 +9,9 @@ use uor_semantic::{
     CompatibilityFormat, CompatibilityManifest, CompatibilityPrediction, CompatibilityWitness,
     Depth, ExactPolicy, GenerationState, MAX_EMISSION_RECORDS, MAX_EXACT_RECORDS,
     MAX_REGION_RECORDS, Prediction, PredictionSource, R4G1Error, R4G1Graph, R4G1Identity,
-    R4G1RangeField, R4G1Section, R4G1Structure, R4Status, ScoreQ, TokenScore, context_signature,
-    generate_greedy_into,
+    R4G1RangeField, R4G1Section, R4G1Structure, R4Status, ResidualContribution,
+    ResidualContributionKind, ScoreAccumulator, ScoreQ, ScoringError, TokenScore,
+    context_signature, generate_greedy_into,
 };
 use uor_semantic_cli::{
     CaptureOptions, CompileRequest as CliCompileRequest, DownloadRequest, SourceCompileRequest,
@@ -1222,4 +1223,74 @@ fn r4g1_export_emits_root_prior_and_rx1_exct_cx_17() {
     let exct_offset = exct_offset.expect("EXCT table entry exists");
     malformed[exct_offset + 8] = 4;
     assert_eq!(R4G1Graph::parse(&malformed), Err(R4G1Error::InvalidExct));
+}
+
+#[test]
+fn r4g1_scoring_accumulates_unique_residuals_with_deterministic_ties_cx_18() {
+    let mut accumulator = ScoreAccumulator::<2>::new();
+    assert!(
+        accumulator
+            .accumulate(ResidualContribution {
+                kind: ResidualContributionKind::RootPrior,
+                contribution_id: 10,
+                raw_value: i32::MAX - 5,
+            })
+            .expect("first contribution fits")
+    );
+    assert!(
+        !accumulator
+            .accumulate(ResidualContribution {
+                kind: ResidualContributionKind::InteractionResidual,
+                contribution_id: 10,
+                raw_value: 500,
+            })
+            .expect("duplicate contribution is ignored")
+    );
+    assert_eq!(accumulator.score(), i32::MAX - 5);
+
+    assert!(
+        accumulator
+            .accumulate(ResidualContribution {
+                kind: ResidualContributionKind::TokenEmission,
+                contribution_id: 11,
+                raw_value: 10,
+            })
+            .expect("second contribution fits")
+    );
+    assert_eq!(accumulator.score(), i32::MAX);
+    assert_eq!(accumulator.evidence_count(), 2);
+    assert_eq!(
+        accumulator.accumulate(ResidualContribution {
+            kind: ResidualContributionKind::ConstraintPenalty,
+            contribution_id: 12,
+            raw_value: -1,
+        }),
+        Err(ScoringError::EvidenceCapacityExceeded)
+    );
+
+    let mut negative = ScoreAccumulator::<2>::new();
+    negative
+        .accumulate(ResidualContribution {
+            kind: ResidualContributionKind::ConstraintPenalty,
+            contribution_id: 20,
+            raw_value: i32::MIN + 1,
+        })
+        .expect("negative contribution fits");
+    negative
+        .accumulate(ResidualContribution {
+            kind: ResidualContributionKind::UncertaintyPenalty,
+            contribution_id: 21,
+            raw_value: -10,
+        })
+        .expect("negative saturation contribution fits");
+    assert_eq!(negative.score(), i32::MIN);
+
+    assert_eq!(
+        ScoreAccumulator::<2>::compare_candidates(50, 3, 50, 4),
+        core::cmp::Ordering::Less
+    );
+    assert_eq!(
+        ScoreAccumulator::<2>::compare_candidates(51, 9, 50, 1),
+        core::cmp::Ordering::Less
+    );
 }

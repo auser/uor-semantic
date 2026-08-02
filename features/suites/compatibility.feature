@@ -101,3 +101,9 @@ Feature: R4G1 and TLA5 compatibility bridge
     Given compiled emissions and exact-context records
     When a structural R4G1 container is exported
     Then EMIT root framing and RX1 EXCT evidence validate without claiming scored equivalence
+
+  @CX-18 @build
+  Scenario: R4G1 residual scoring is bounded and deterministic
+    Given signed fixed-point residual contributions and candidate IDs
+    When compatibility scoring accumulates evidence
+    Then saturation, duplicate suppression, capacity errors, and tie-breaking remain explicit

@@ -159,6 +159,9 @@ the interchange boundary, and `compile`/`model compile` can write it with
 root prior, and an RX1-framed EXCT table from synthetic route-code projections.
 It is not scored R4G1 equivalence: target graded codes, predictive scoring
 certificates, and target replay parity remain future work.
+The published `no_std` core now also exposes the bounded R4G1 residual-scoring
+semantics: signed saturation, evidence-ID de-duplication, capacity errors, and
+deterministic score/ID ordering.
 
 ## Hugging Face model pipeline
 

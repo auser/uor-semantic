@@ -73,6 +73,7 @@ mod path;
 mod r4g1;
 mod region;
 mod router;
+mod scoring;
 
 pub use address::{AddressInsertError, AddressedPath, SemanticAddressBundle};
 pub use artifact::{
@@ -101,3 +102,4 @@ pub use r4g1::{
 };
 pub use region::{Region, masked_hamming};
 pub use router::{CandidateSet, CandidateSetError, ReferenceRouter, RouteSummary};
+pub use scoring::{ResidualContribution, ResidualContributionKind, ScoreAccumulator, ScoringError};
