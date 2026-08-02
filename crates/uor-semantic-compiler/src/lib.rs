@@ -9,6 +9,7 @@
 mod compiler;
 mod observation;
 mod parity;
+mod r4g1_export;
 mod rollout;
 mod sha256;
 
@@ -20,4 +21,5 @@ pub use parity::{
     ParityError, ParityReport, ParityThresholds, RolloutParityReport, evaluate,
     evaluate_graph_only, evaluate_rollouts,
 };
+pub use r4g1_export::{R4G1Export, R4G1ExportError, export_r4g1, verify_r4g1_cids};
 pub use rollout::{MAX_ROLLOUT_TOKENS, Rollout, RolloutCorpus, RolloutError, RolloutMetadata};

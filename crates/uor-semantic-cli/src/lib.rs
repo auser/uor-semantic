@@ -13,8 +13,9 @@ use uor_semantic::{
     generate_greedy_into,
 };
 use uor_semantic_compiler::{
-    CompilerConfig, MAX_ROLLOUT_TOKENS, ObservationCorpus, ParityThresholds, RolloutCorpus,
-    compile, evaluate, evaluate_graph_only, evaluate_rollouts,
+    CompiledArtifact, CompilerConfig, MAX_ROLLOUT_TOKENS, ObservationCorpus, ParityReport,
+    ParityThresholds, RolloutCorpus, compile as compile_observations, evaluate,
+    evaluate_graph_only, evaluate_rollouts,
 };
 
 const CAPTURE_SCRIPT: &str = include_str!("../../../scripts/capture_hf.py");
@@ -190,6 +191,13 @@ pub enum PreflightError {
         /// Resolved corpus path.
         path: PathBuf,
     },
+    /// The local model source is not a complete Hugging Face-style snapshot.
+    SourceInvalid {
+        /// Resolved source directory.
+        path: PathBuf,
+        /// Missing or malformed source requirement.
+        reason: String,
+    },
     /// The work directory is not a usable writable directory.
     WorkDirectory {
         /// Resolved work directory path.
@@ -211,6 +219,95 @@ pub enum PreflightError {
         /// Optional command detail.
         detail: Option<String>,
     },
+}
+
+/// Typed request for downloading an immutable Hugging Face source snapshot.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DownloadRequest {
+    /// Hugging Face owner/repository.
+    pub repository: String,
+    /// Immutable 40-character commit revision.
+    pub revision: String,
+    /// Destination directory for the source snapshot.
+    pub output: PathBuf,
+}
+
+/// Typed request for compiling captured observations into a runtime artifact.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CompileRequest {
+    /// Line-oriented `.uorobs` observation corpus.
+    pub observations: PathBuf,
+    /// Destination `.uors` artifact.
+    pub output: PathBuf,
+    /// Deterministic compiler configuration.
+    pub config: CompilerConfig,
+}
+
+/// Capture settings for a typed source compilation.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CaptureOptions {
+    /// Python executable hosting the Hugging Face bridge.
+    pub python: String,
+    /// Number of teacher candidates retained per observation.
+    pub top_k: usize,
+    /// Maximum captured context length.
+    pub max_context: usize,
+    /// Optional observation sample bound.
+    pub max_samples: usize,
+    /// Optional bounded rollout length; zero disables rollout capture.
+    pub rollout_tokens: usize,
+}
+
+impl Default for CaptureOptions {
+    fn default() -> Self {
+        Self {
+            python: "python3".to_owned(),
+            top_k: 64,
+            max_context: 32,
+            max_samples: usize::MAX,
+            rollout_tokens: 0,
+        }
+    }
+}
+
+/// Typed request for compiling a verified local teacher source.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SourceCompileRequest {
+    /// Verified local Hugging Face-style source directory.
+    pub source_dir: PathBuf,
+    /// Model identifier recorded in observation provenance.
+    pub model_id: String,
+    /// Immutable source revision recorded in observation provenance.
+    pub revision: String,
+    /// UTF-8 construction corpus used by the teacher bridge.
+    pub corpus: PathBuf,
+    /// Output directory for observations, artifact, and parity.
+    pub work_dir: PathBuf,
+    /// Teacher capture settings.
+    pub capture: CaptureOptions,
+    /// Deterministic artifact compiler settings.
+    pub compiler: CompilerConfig,
+    /// Required parity floors for the construction corpus.
+    pub parity: ParityThresholds,
+}
+
+/// Files and measurements produced by [`compile_source`].
+#[derive(Clone, Debug)]
+pub struct SourceCompileResult {
+    /// Resolved resumable output directory.
+    pub work_dir: PathBuf,
+    /// Captured observation file.
+    pub observations: PathBuf,
+    /// Compiled runtime artifact.
+    pub artifact: PathBuf,
+    /// JSON parity report.
+    pub parity_report: PathBuf,
+    /// In-memory validated artifact summary.
+    pub compiled: CompiledArtifact,
+    /// Measured construction-corpus parity.
+    pub parity: ParityReport,
+    /// Optional bounded autoregressive rollout capture.
+    pub rollouts: Option<PathBuf>,
 }
 
 impl fmt::Display for PreflightError {
@@ -240,6 +337,11 @@ impl fmt::Display for PreflightError {
             Self::CorpusEmpty { path } => write!(
                 formatter,
                 "corpus file {} has no non-blank samples; add one non-empty line per sample or copy data/construction.example.txt",
+                path.display()
+            ),
+            Self::SourceInvalid { path, reason } => write!(
+                formatter,
+                "model source {} is invalid ({reason}); provide config.json, tokenizer.json, and at least one .safetensors file",
                 path.display()
             ),
             Self::WorkDirectory { path, reason } => write!(
@@ -289,6 +391,8 @@ pub fn run(arguments: &[String]) -> Result<(), CliError> {
         "self-test" => command_self_test(),
         "artifact" => command_artifact(&arguments[1..]),
         "model" => command_model(&arguments[1..]),
+        "download" => command_download(&arguments[1..]),
+        "compile" => command_compile(&arguments[1..]),
         _ => Err(CliError::Usage(format!(
             "unknown command `{command}`; run `uor-semantic help`"
         ))),
@@ -319,8 +423,54 @@ fn print_help() {
         "  model build <repo> --revision <40-hex> --corpus <txt> --work-dir <dir>\n",
         "      [--held-out-corpus <txt>] [capture and compiler options]\n",
         "  model generate <artifact> --source <model-dir> --prompt <text>\n",
-        "      --max-tokens <n> [--python <path>]\n"
+        "      --max-tokens <n> [--python <path>]\n",
+        "\nCompatibility aliases matching the R4 lifecycle surface:\n",
+        "  download --repository <repo> --revision <40-hex> --name <name> [--output <dir>]\n",
+        "  compile <uorobs> --output <artifact> [compiler options]\n"
     ));
+}
+
+fn command_download(arguments: &[String]) -> Result<(), CliError> {
+    let repository = required_option(arguments, "--repository")?;
+    let revision = required_option(arguments, "--revision")?;
+    let name = required_option(arguments, "--name")?;
+    let output = option_value(arguments, "--output")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(".uor-models/sources").join(safe_name(name)));
+    let path = download(&DownloadRequest {
+        repository: repository.to_owned(),
+        revision: revision.to_owned(),
+        output,
+    })?;
+    println!("{}", path.display());
+    Ok(())
+}
+
+fn command_compile(arguments: &[String]) -> Result<(), CliError> {
+    let observations = PathBuf::from(required_positional(arguments, 0, "observation file")?);
+    let output = PathBuf::from(required_option(arguments, "--output")?);
+    let request = CompileRequest {
+        observations,
+        output,
+        config: compiler_config(arguments)?,
+    };
+    let artifact = compile(&request)?;
+    println!("codebook_id: {}", hex(artifact.codebook_id.as_bytes()));
+    println!("observations: {}", artifact.observations);
+    println!("bytes: {}", artifact.bytes.len());
+    Ok(())
+}
+
+fn safe_name(name: &str) -> String {
+    name.chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() || matches!(character, '-' | '_') {
+                character
+            } else {
+                '-'
+            }
+        })
+        .collect()
 }
 
 fn command_artifact(arguments: &[String]) -> Result<(), CliError> {
@@ -493,18 +643,34 @@ fn artifact_generate(path: &Path, prompt: &[u32], max_tokens: usize) -> Result<V
     Ok(output)
 }
 
-fn model_download(repository: &str, revision: &str, output: &Path) -> Result<(), CliError> {
-    validate_revision(revision)?;
-    if verified_pinned_snapshot(output, revision) {
+/// Downloads an immutable source snapshot using the official `hf` CLI.
+pub fn download(request: &DownloadRequest) -> Result<PathBuf, CliError> {
+    validate_revision(&request.revision)?;
+    if verified_pinned_snapshot(&request.output, &request.revision) {
         println!(
             "reusing verified pinned source snapshot: {}",
-            output.display()
+            request.output.display()
         );
-        return Ok(());
+        return Ok(request.output.clone());
     }
-    std::fs::create_dir_all(output)?;
-    let arguments = download_arguments(repository, revision, output);
-    run_process("hf", &arguments)
+    std::fs::create_dir_all(&request.output)?;
+    let arguments = download_arguments(&request.repository, &request.revision, &request.output);
+    run_process("hf", &arguments)?;
+    Ok(request.output.clone())
+}
+
+/// Compatibility name matching the R4 model-source API.
+pub fn download_source(request: &DownloadRequest) -> Result<PathBuf, CliError> {
+    download(request)
+}
+
+fn model_download(repository: &str, revision: &str, output: &Path) -> Result<(), CliError> {
+    download(&DownloadRequest {
+        repository: repository.to_owned(),
+        revision: revision.to_owned(),
+        output: output.to_owned(),
+    })
+    .map(|_| ())
 }
 
 /// Constructs the exact official `hf download` argument vector.
@@ -517,15 +683,6 @@ pub fn download_arguments(repository: &str, revision: &str, output: &Path) -> Ve
         "--local-dir".to_owned(),
         output.display().to_string(),
     ]
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct CaptureOptions {
-    python: String,
-    top_k: usize,
-    max_context: usize,
-    max_samples: usize,
-    rollout_tokens: usize,
 }
 
 impl CaptureOptions {
@@ -548,16 +705,10 @@ impl CaptureOptions {
     }
 }
 
-fn model_capture(
-    source: &Path,
-    corpus: &Path,
-    output: &Path,
-    model_id: &str,
-    revision: &str,
-    options: CaptureOptions,
-    rollout_output: Option<&Path>,
+fn validate_capture_options(
+    options: &CaptureOptions,
+    has_rollout_output: bool,
 ) -> Result<(), CliError> {
-    validate_revision(revision)?;
     if options.top_k == 0 {
         return Err(CliError::InvalidValue("top-k must be non-zero".to_owned()));
     }
@@ -572,16 +723,35 @@ fn model_capture(
             "max-samples must be non-zero".to_owned(),
         ));
     }
-    if options.rollout_tokens > 0 && rollout_output.is_none() {
+    if options.rollout_tokens > MAX_ROLLOUT_TOKENS {
+        return Err(CliError::InvalidValue(format!(
+            "rollout-tokens must be between 1 and {MAX_ROLLOUT_TOKENS}"
+        )));
+    }
+    if options.rollout_tokens > 0 && !has_rollout_output {
         return Err(CliError::InvalidValue(
             "rollout-output is required when rollout-tokens is non-zero".to_owned(),
         ));
     }
-    if options.rollout_tokens == 0 && rollout_output.is_some() {
+    if options.rollout_tokens == 0 && has_rollout_output {
         return Err(CliError::InvalidValue(
             "rollout-tokens is required when rollout-output is provided".to_owned(),
         ));
     }
+    Ok(())
+}
+
+fn model_capture(
+    source: &Path,
+    corpus: &Path,
+    output: &Path,
+    model_id: &str,
+    revision: &str,
+    options: CaptureOptions,
+    rollout_output: Option<&Path>,
+) -> Result<(), CliError> {
+    validate_revision(revision)?;
+    validate_capture_options(&options, rollout_output.is_some())?;
     if let Some(parent) = output.parent() {
         std::fs::create_dir_all(parent)?;
     }
@@ -626,12 +796,11 @@ fn model_compile(
     output: &Path,
     config: CompilerConfig,
 ) -> Result<(), CliError> {
-    let corpus = ObservationCorpus::read(observations)?;
-    let artifact = compile(&corpus, config)?;
-    if let Some(parent) = output.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
-    std::fs::write(output, &artifact.bytes)?;
+    let artifact = compile(&CompileRequest {
+        observations: observations.to_owned(),
+        output: output.to_owned(),
+        config,
+    })?;
     println!("artifact: {}", output.display());
     println!("codebook_id: {}", hex(artifact.codebook_id.as_bytes()));
     println!("observations: {}", artifact.observations);
@@ -641,6 +810,93 @@ fn model_compile(
     println!("emissions: {}", artifact.emissions);
     println!("bytes: {}", artifact.bytes.len());
     Ok(())
+}
+
+/// Compiles a typed observation-corpus request and writes its validated artifact.
+pub fn compile(request: &CompileRequest) -> Result<CompiledArtifact, CliError> {
+    let corpus = ObservationCorpus::read(&request.observations)?;
+    let artifact = compile_observations(&corpus, request.config)?;
+    if let Some(parent) = request.output.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(&request.output, &artifact.bytes)?;
+    Ok(artifact)
+}
+
+/// Captures a verified local teacher source, compiles its observations, and
+/// writes a parity report in one typed operation.
+///
+/// This is the typed source-side lifecycle bridge corresponding to the R4
+/// compile entry point. It currently emits this repository's validated `.uors`
+/// artifact; scored R4G1 emission remains a separate compatibility stage.
+pub fn compile_source(request: &SourceCompileRequest) -> Result<SourceCompileResult, CliError> {
+    validate_revision(&request.revision)?;
+    validate_capture_options(&request.capture, request.capture.rollout_tokens > 0)?;
+    validate_compiler_config(request.compiler)?;
+
+    let source = preflight_source_directory(&request.source_dir)?;
+    let corpus = preflight_corpus(&request.corpus)?;
+    let work_dir = preflight_work_directory(&request.work_dir)?;
+    let observations = work_dir.join("observations.uorobs");
+    let artifact = work_dir.join("model.uors");
+    let parity_report = work_dir.join("parity.json");
+    let rollouts = (request.capture.rollout_tokens > 0).then(|| work_dir.join("rollouts.uorroll"));
+
+    for path in [&observations, &artifact, &parity_report] {
+        if path.exists() {
+            return Err(CliError::Preflight(PreflightError::ExistingWork {
+                path: path.clone(),
+            }));
+        }
+    }
+    if let Some(path) = &rollouts
+        && path.exists()
+    {
+        return Err(CliError::Preflight(PreflightError::ExistingWork {
+            path: path.clone(),
+        }));
+    }
+
+    check_python_bridge(&request.capture.python)?;
+    model_capture(
+        &source,
+        &corpus,
+        &observations,
+        &request.model_id,
+        &request.revision,
+        request.capture.clone(),
+        rollouts.as_deref(),
+    )?;
+    let compiled = compile(&CompileRequest {
+        observations: observations.clone(),
+        output: artifact.clone(),
+        config: request.compiler,
+    })?;
+    let captured = ObservationCorpus::read(&observations)?;
+    let parity = evaluate(&compiled.bytes, &captured)?;
+    std::fs::write(&parity_report, parity.to_json())?;
+    if !parity.passes(request.parity) {
+        return Err(CliError::ParityThresholdFailed {
+            exact: parity.exact_top1_basis_points(),
+            required_exact: request.parity.exact_top1_basis_points,
+            graph: parity.graph_top1_basis_points(),
+            required_graph: request.parity.graph_top1_basis_points,
+            graph_coverage: parity.graph_coverage_basis_points(),
+            required_graph_coverage: request.parity.graph_coverage_basis_points,
+            graph_top_k: parity.graph_top_k_recall_basis_points(),
+            required_graph_top_k: request.parity.graph_top_k_recall_basis_points,
+        });
+    }
+
+    Ok(SourceCompileResult {
+        work_dir,
+        observations,
+        artifact,
+        parity_report,
+        compiled,
+        parity,
+        rollouts,
+    })
 }
 
 fn model_parity(
@@ -936,6 +1192,51 @@ fn preflight_corpus(path: &Path) -> Result<PathBuf, CliError> {
     Ok(resolved)
 }
 
+fn preflight_source_directory(path: &Path) -> Result<PathBuf, CliError> {
+    let resolved = resolve_path(path)?;
+    let metadata = std::fs::metadata(&resolved).map_err(|error| {
+        CliError::Preflight(PreflightError::SourceInvalid {
+            path: resolved.clone(),
+            reason: error.to_string(),
+        })
+    })?;
+    if !metadata.is_dir() {
+        return Err(CliError::Preflight(PreflightError::SourceInvalid {
+            path: resolved,
+            reason: "path is not a directory".to_owned(),
+        }));
+    }
+    for required in ["config.json", "tokenizer.json"] {
+        if !resolved.join(required).is_file() {
+            return Err(CliError::Preflight(PreflightError::SourceInvalid {
+                path: resolved,
+                reason: format!("missing {required}"),
+            }));
+        }
+    }
+    let has_weights = std::fs::read_dir(&resolved)
+        .map_err(|error| {
+            CliError::Preflight(PreflightError::SourceInvalid {
+                path: resolved.clone(),
+                reason: error.to_string(),
+            })
+        })?
+        .filter_map(Result::ok)
+        .any(|entry| {
+            entry
+                .path()
+                .extension()
+                .is_some_and(|ext| ext == "safetensors")
+        });
+    if !has_weights {
+        return Err(CliError::Preflight(PreflightError::SourceInvalid {
+            path: resolved,
+            reason: "no .safetensors weights found".to_owned(),
+        }));
+    }
+    Ok(resolved)
+}
+
 fn preflight_work_directory(path: &Path) -> Result<PathBuf, CliError> {
     let requested = resolve_path(path)?;
     std::fs::create_dir_all(&requested).map_err(|error| {
@@ -1150,7 +1451,7 @@ fn command_self_test() -> Result<(), CliError> {
         "O|1,2|3|3:0,4:-10,5:-20\n",
         "O|1,2,3|4|4:0,5:-10,6:-20\n",
     ))?;
-    let artifact = compile(&corpus, CompilerConfig::accuracy())?;
+    let artifact = compile_observations(&corpus, CompilerConfig::accuracy())?;
     let report = evaluate(&artifact.bytes, &corpus)?;
     if report.exact_top1_basis_points() != 10_000 {
         return Err(CliError::ParityThresholdFailed {

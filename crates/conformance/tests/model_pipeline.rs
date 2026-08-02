@@ -12,10 +12,14 @@ use uor_semantic::{
     R4G1RangeField, R4G1Section, R4G1Structure, R4Status, ScoreQ, TokenScore, context_signature,
     generate_greedy_into,
 };
-use uor_semantic_cli::download_arguments;
+use uor_semantic_cli::{
+    CaptureOptions, CompileRequest as CliCompileRequest, DownloadRequest, SourceCompileRequest,
+    compile as cli_compile, compile_source, download as cli_download, download_arguments,
+};
 use uor_semantic_compiler::{
     CompilerConfig, Observation, ObservationCorpus, ObservationMetadata, ObservedEmission,
     ParityThresholds, RolloutCorpus, compile, evaluate, evaluate_graph_only, evaluate_rollouts,
+    export_r4g1, verify_r4g1_cids,
 };
 
 const TRAIN: &str = concat!(
@@ -961,4 +965,142 @@ fn r4g1_graph_view_rejects_invalid_ranges_and_endpoints_cx_10() {
         R4G1Graph::parse(&bad_edge),
         Err(R4G1Error::EdgeEndpointOutOfBounds { edge: 0 })
     );
+}
+
+#[test]
+fn typed_r4_lifecycle_entry_points_pin_and_compile_cx_11() {
+    let rejected = cli_download(&DownloadRequest {
+        repository: "org/model".to_owned(),
+        revision: "main".to_owned(),
+        output: std::env::temp_dir().join("uor-semantic-invalid-download"),
+    })
+    .expect_err("moving revisions are rejected before hf is invoked");
+    assert!(
+        rejected
+            .to_string()
+            .contains("immutable 40-character hexadecimal")
+    );
+
+    let root =
+        std::env::temp_dir().join(format!("uor-semantic-r4-lifecycle-{}", std::process::id()));
+    let observations = root.join("observations.uorobs");
+    let artifact = root.join("compiled/model.uors");
+    fs::create_dir_all(&root).expect("lifecycle fixture directory creates");
+    fs::write(&observations, TRAIN).expect("observation fixture writes");
+    let compiled = cli_compile(&CliCompileRequest {
+        observations,
+        output: artifact.clone(),
+        config: CompilerConfig::accuracy(),
+    })
+    .expect("typed compile succeeds");
+    assert!(artifact.is_file());
+    assert_eq!(
+        ArtifactView::parse(&compiled.bytes).unwrap().codebook_id(),
+        compiled.codebook_id
+    );
+}
+
+#[test]
+fn typed_source_compile_preflights_corpus_before_teacher_bridge_cx_12() {
+    let root = std::env::temp_dir().join(format!(
+        "uor-semantic-source-compile-{}",
+        std::process::id()
+    ));
+    let source = root.join("source");
+    fs::create_dir_all(&source).expect("source fixture directory creates");
+    fs::write(source.join("config.json"), b"{}").expect("config fixture writes");
+    fs::write(source.join("tokenizer.json"), b"{}").expect("tokenizer fixture writes");
+    fs::write(source.join("model.safetensors"), []).expect("weights fixture writes");
+
+    let result = compile_source(&SourceCompileRequest {
+        source_dir: source,
+        model_id: "fixture/model".to_owned(),
+        revision: "0123456789abcdef0123456789abcdef01234567".to_owned(),
+        corpus: root.join("missing.txt"),
+        work_dir: root.join("work"),
+        capture: CaptureOptions::default(),
+        compiler: CompilerConfig::accuracy(),
+        parity: ParityThresholds {
+            exact_top1_basis_points: 10_000,
+            graph_top1_basis_points: 0,
+            graph_coverage_basis_points: 0,
+            graph_top_k_recall_basis_points: 0,
+        },
+    });
+    assert!(matches!(
+        result,
+        Err(uor_semantic_cli::CliError::Preflight(
+            uor_semantic_cli::PreflightError::MissingCorpus { .. }
+        ))
+    ));
+    assert!(!root.join("work").exists());
+}
+
+#[test]
+fn r4g1_graph_view_rejects_invalid_rout_bytecode_cx_13() {
+    let valid = r4g1_graph_fixture();
+
+    let mut unknown = valid.clone();
+    unknown[488] = 0x7f;
+    assert_eq!(
+        R4G1Graph::parse(&unknown),
+        Err(R4G1Error::UnknownRoutingOp {
+            offset: 0,
+            opcode: 0x7f,
+        })
+    );
+
+    let mut operand = valid.clone();
+    operand[488] = 0x01;
+    operand[489] = 1;
+    assert_eq!(
+        R4G1Graph::parse(&operand),
+        Err(R4G1Error::RoutingOperandOutOfBounds { op_index: 0 })
+    );
+
+    let mut jump = valid.clone();
+    jump[488] = 0x02;
+    jump[489..491].copy_from_slice(&1u16.to_le_bytes());
+    assert_eq!(
+        R4G1Graph::parse(&jump),
+        Err(R4G1Error::RoutingJumpOutOfBounds {
+            op_index: 0,
+            target: 2,
+        })
+    );
+
+    let mut shortlist = valid;
+    shortlist[488] = 0x03;
+    shortlist[493..495].copy_from_slice(&u16::MAX.to_le_bytes());
+    assert_eq!(
+        R4G1Graph::parse(&shortlist),
+        Err(R4G1Error::RoutingShortlistOutOfBounds { op_index: 0 })
+    );
+}
+
+#[test]
+fn compiled_artifact_exports_to_structural_r4g1_with_valid_cids_cx_14() {
+    let compiled = compile(&train(), CompilerConfig::accuracy()).expect("fixture compiles");
+    let exported = export_r4g1(&compiled).expect("structural R4G1 export succeeds");
+    let repeated = export_r4g1(&compiled).expect("repeated structural export succeeds");
+    assert_eq!(exported.bytes, repeated.bytes);
+    let graph = R4G1Graph::parse(&exported.bytes).expect("exported graph validates");
+
+    assert_eq!(graph.node_count(), exported.node_count);
+    assert_eq!(graph.edge_count(), 0);
+    assert_eq!(
+        graph.identity().artifact_id().as_bytes(),
+        &exported.artifact_cid
+    );
+    assert_eq!(graph.identity().section_count(), 7);
+    verify_r4g1_cids(&exported.bytes).expect("exported CIDs verify");
+
+    let mut tampered = exported.bytes.clone();
+    tampered[24] ^= 1;
+    assert!(matches!(
+        verify_r4g1_cids(&tampered),
+        Err(uor_semantic_compiler::R4G1ExportError::InvalidCid(
+            "artifact"
+        ))
+    ));
 }

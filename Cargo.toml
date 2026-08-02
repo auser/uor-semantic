@@ -27,6 +27,7 @@ uor-semantic-compiler = { version = "0.1.0", path = "crates/uor-semantic-compile
 uor-semantic-cli = { version = "0.1.0", path = "crates/uor-semantic-cli" }
 serde = { version = "=1.0.229", features = ["derive"] }
 toml = "=0.8.23"
+blake3 = "=1.5.0"
 
 [workspace.lints.rust]
 missing_docs = "deny"

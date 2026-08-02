@@ -59,3 +59,27 @@ Feature: R4G1 and TLA5 compatibility bridge
     Given a R4G1 graph with an invalid node range, depth, ROUT window, or edge endpoint
     When its borrowed graph view is created
     Then it returns a typed semantic validation error
+
+  @CX-11 @build
+  Scenario: Typed lifecycle entry points download and compile
+    Given typed requests for an immutable source and an observation corpus
+    When the download and compile entry points are called
+    Then the download request is pinned and the compile request writes a validated artifact
+
+  @CX-12 @build
+  Scenario: Typed source compilation preflights before the teacher bridge
+    Given a local model snapshot and a missing construction corpus
+    When typed source compilation is requested
+    Then it returns a typed corpus failure before invoking Python
+
+  @CX-13 @build
+  Scenario: R4G1 graph views validate ROUT bytecode
+    Given a graph with an unknown ROUT opcode, invalid operand, jump, or shortlist
+    When its borrowed graph view is created
+    Then it returns a typed ROUT validation error
+
+  @CX-14 @build
+  Scenario: Compiled artifacts export to canonical structural R4G1
+    Given a validated compiled semantic artifact
+    When it is exported through the R4G1 compatibility bridge
+    Then the borrowed graph view accepts its sections and both BLAKE3 CIDs verify

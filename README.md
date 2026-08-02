@@ -130,6 +130,33 @@ model generate
 
 Run `uor-semantic help` for the complete argument surface.
 
+For callers migrating from the R4 lifecycle API, the CLI crate also exposes
+typed `download`/`download_source`, observation `compile`, and source
+`compile_source` functions. The equivalent
+top-level command aliases are:
+
+```bash
+./target/release/uor-semantic download \
+  --repository HuggingFaceTB/SmolLM2-135M-Instruct \
+  --revision 7e27bd9f95328f0f3b08261d1252705110c806f8 \
+  --name smollm2-135m
+
+./target/release/uor-semantic compile \
+  .uor-models/smollm2-135m/observations.uorobs \
+  --output .uor-models/smollm2-135m/model.uors
+```
+
+`model build` remains the end-to-end source-download, teacher-capture,
+compile, and parity workflow; the compatibility `compile` entry point starts
+from captured observations and always writes a runtime-validated `.uors`
+artifact. `compile_source` performs the same source-side orchestration from a
+verified local Hugging Face snapshot and a construction corpus. The compiler
+also exposes `export_r4g1` for a deterministic structural R4G1 container with
+canonical aligned sections and verified BLAKE3 HEAD and artifact CIDs. This is
+the interchange boundary, not scored R4G1 equivalence: forward/refinement
+edges, residual EXCT evidence, and target scoring certificates remain future
+work.
+
 ## Hugging Face model pipeline
 
 Create a Python environment for teacher capture:

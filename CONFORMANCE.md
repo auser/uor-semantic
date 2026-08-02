@@ -50,6 +50,12 @@ lowercased ID.
 | `CX-06` | `build` | The bounded R4G1 identity adapter rejects truncated, unsupported, mis-sized, unaligned, and head-less containers before exposing identities. |
 | `CX-07` | `build` | The borrowed R4G1 structure view exposes only canonically ordered containers containing every required graph section. |
 | `CX-08` | `build` | The R4G1 structure view rejects unknown mandatory sections, missing required sections, and overlapping section bodies. |
+| `CX-09` | `build` | The borrowed R4G1 graph view validates HEAD bounds and exact NODE/EDGE record lengths before exposing typed records. |
+| `CX-10` | `build` | R4G1 graph validation rejects node range and depth violations, ROUT word ranges, and out-of-bounds edge endpoints. |
+| `CX-11` | `build` | Typed download and compile entry points expose the R4 lifecycle surface while retaining pinned-source and validated-artifact checks. |
+| `CX-12` | `build` | Typed source compilation validates the local model and corpus before invoking the Python teacher bridge, then emits a validated artifact and parity report. |
+| `CX-13` | `build` | The borrowed R4G1 graph view validates ROUT v0 opcodes, termination, jumps, signature-word operands, and shortlist ranges against HEAD bounds. |
+| `CX-14` | `build` | The compiler emits a deterministic structural R4G1 container with canonical section layout and valid BLAKE3 HEAD and artifact CIDs. |
 
 ## compiler
 

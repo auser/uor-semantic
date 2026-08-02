@@ -14,6 +14,7 @@ publish = false
 
 [dependencies]
 uor-semantic = { workspace = true }
+blake3 = { workspace = true }
 
 [lints]
 workspace = true

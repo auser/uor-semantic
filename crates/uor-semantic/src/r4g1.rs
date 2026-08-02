@@ -3,7 +3,7 @@
 //! This is deliberately a stage-1 identity view. It validates the fixed
 //! container envelope, canonical section-table ordering, section bounds, and
 //! the draft-line HEAD identity prefix. It does not yet validate R4G1 section
-//! semantics, graph ranges, ROUT bytecode, or BLAKE3 CIDs.
+//! semantics beyond bounded graph records, or BLAKE3 CIDs.
 
 use core::fmt;
 
@@ -114,6 +114,46 @@ pub enum R4G1Error {
     },
     /// A checked fixed-width range calculation overflowed.
     RangeOverflow,
+    /// A ROUT bytecode opcode is not defined by the v0 instruction set.
+    UnknownRoutingOp {
+        /// Byte offset of the unknown opcode.
+        offset: u32,
+        /// Raw opcode byte.
+        opcode: u8,
+    },
+    /// A ROUT instruction is truncated at the end of the section.
+    TruncatedRoutingOp {
+        /// Byte offset of the truncated instruction.
+        offset: u32,
+        /// Raw opcode byte.
+        opcode: u8,
+    },
+    /// A ROUT program has neither HALT nor a terminal LEAF.
+    RoutingProgramUnterminated,
+    /// A ROUT program exceeds HEAD.D.
+    RoutingProgramTooDeep {
+        /// Number of decoded instructions.
+        ops: u32,
+        /// Declared maximum instruction count.
+        max: u32,
+    },
+    /// A ROUT instruction operand exceeds HEAD bounds.
+    RoutingOperandOutOfBounds {
+        /// Instruction index.
+        op_index: u32,
+    },
+    /// A ROUT forward jump targets outside the decoded program.
+    RoutingJumpOutOfBounds {
+        /// Jumping instruction index.
+        op_index: u32,
+        /// Decoded target instruction index.
+        target: u32,
+    },
+    /// A ROUT LEAF shortlist range exceeds the trailing table.
+    RoutingShortlistOutOfBounds {
+        /// LEAF instruction index.
+        op_index: u32,
+    },
 }
 
 impl fmt::Display for R4G1Error {
@@ -145,6 +185,15 @@ impl fmt::Display for R4G1Error {
             Self::NodeBoundExceeded { .. } => "R4G1 node exceeds a HEAD bound",
             Self::EdgeEndpointOutOfBounds { .. } => "R4G1 edge endpoint is out of bounds",
             Self::RangeOverflow => "R4G1 range arithmetic overflowed",
+            Self::UnknownRoutingOp { .. } => "R4G1 ROUT opcode is unknown",
+            Self::TruncatedRoutingOp { .. } => "R4G1 ROUT instruction is truncated",
+            Self::RoutingProgramUnterminated => "R4G1 ROUT program is unterminated",
+            Self::RoutingProgramTooDeep { .. } => "R4G1 ROUT program exceeds HEAD depth",
+            Self::RoutingOperandOutOfBounds { .. } => "R4G1 ROUT operand is out of bounds",
+            Self::RoutingJumpOutOfBounds { .. } => "R4G1 ROUT jump is out of bounds",
+            Self::RoutingShortlistOutOfBounds { .. } => {
+                "R4G1 ROUT shortlist range is out of bounds"
+            }
         };
         formatter.write_str(message)
     }
@@ -566,6 +615,7 @@ impl<'a> R4G1Graph<'a> {
                 section: R4G1Section::Rout,
             });
         }
+        validate_rout(rout, read_u32(head, 192), signature_words)?;
         let rout_words = (rout.len() >> 3) as u64;
 
         let emit = structure
@@ -581,22 +631,21 @@ impl<'a> R4G1Graph<'a> {
         let emit_remainder = emit.len() - 4;
         let max_frontier = read_u16(head, 180);
         let max_emissions = read_u32(head, 188);
+        let bounds = NodeBounds {
+            edge_count,
+            emit_remainder,
+            rout_words,
+            signature_words,
+            depth_count,
+            max_frontier,
+            max_emissions,
+        };
 
         let mut node_cursor = 0usize;
         let mut node = 0u32;
         while node < node_count {
             let record = decode_node(node_bytes, node_cursor);
-            validate_node(
-                node,
-                record,
-                edge_count,
-                emit_remainder,
-                rout_words,
-                signature_words,
-                depth_count,
-                max_frontier,
-                max_emissions,
-            )?;
+            validate_node(node, record, bounds)?;
             node_cursor += 30;
             node += 1;
         }
@@ -672,9 +721,112 @@ impl<'a> R4G1Graph<'a> {
     }
 }
 
-fn validate_node(
-    index: u32,
-    node: R4G1Node,
+const ROUT_OP_HALT: u8 = 0x00;
+const ROUT_OP_TEST_POPCOUNT_LE: u8 = 0x01;
+const ROUT_OP_JMP_FWD: u8 = 0x02;
+const ROUT_OP_LEAF: u8 = 0x03;
+
+fn rout_op_size(opcode: u8) -> Option<usize> {
+    Some(match opcode {
+        ROUT_OP_HALT => 1,
+        ROUT_OP_TEST_POPCOUNT_LE => 12,
+        ROUT_OP_JMP_FWD => 3,
+        ROUT_OP_LEAF => 7,
+        _ => return None,
+    })
+}
+
+fn validate_rout(
+    bytes: &[u8],
+    max_program_steps: u32,
+    signature_words: u16,
+) -> Result<(), R4G1Error> {
+    let mut cursor = 0usize;
+    let mut op_count = 0u32;
+    let mut last_opcode = None;
+    let mut halted = false;
+    while cursor < bytes.len() {
+        let opcode = bytes[cursor];
+        let size = rout_op_size(opcode).ok_or(R4G1Error::UnknownRoutingOp {
+            offset: u32::try_from(cursor).unwrap_or(u32::MAX),
+            opcode,
+        })?;
+        if cursor.saturating_add(size) > bytes.len() {
+            return Err(R4G1Error::TruncatedRoutingOp {
+                offset: u32::try_from(cursor).unwrap_or(u32::MAX),
+                opcode,
+            });
+        }
+        op_count = op_count.checked_add(1).ok_or(R4G1Error::RangeOverflow)?;
+        last_opcode = Some(opcode);
+        cursor += size;
+        if opcode == ROUT_OP_HALT {
+            halted = true;
+            break;
+        }
+    }
+    if !halted && last_opcode != Some(ROUT_OP_LEAF) {
+        return Err(R4G1Error::RoutingProgramUnterminated);
+    }
+    if op_count > max_program_steps {
+        return Err(R4G1Error::RoutingProgramTooDeep {
+            ops: op_count,
+            max: max_program_steps,
+        });
+    }
+    let table = &bytes[cursor..];
+
+    cursor = 0;
+    let mut index = 0u32;
+    while index < op_count {
+        let opcode = bytes[cursor];
+        match opcode {
+            ROUT_OP_TEST_POPCOUNT_LE => {
+                let word = bytes[cursor + 1];
+                let threshold = read_u16(bytes, cursor + 10);
+                if u16::from(word) >= signature_words || threshold > 64 {
+                    return Err(R4G1Error::RoutingOperandOutOfBounds { op_index: index });
+                }
+            }
+            ROUT_OP_JMP_FWD => {
+                let delta = read_u16(bytes, cursor + 1);
+                let target = u64::from(index) + 1 + u64::from(delta);
+                if target >= u64::from(op_count) {
+                    return Err(R4G1Error::RoutingJumpOutOfBounds {
+                        op_index: index,
+                        target: u32::try_from(target).unwrap_or(u32::MAX),
+                    });
+                }
+            }
+            ROUT_OP_LEAF => {
+                let start = read_u32(bytes, cursor + 1);
+                let len = read_u16(bytes, cursor + 5);
+                if (table.is_empty() && len != 0)
+                    || (!table.is_empty()
+                        && u64::from(start).saturating_add(u64::from(len)) > table.len() as u64)
+                {
+                    return Err(R4G1Error::RoutingShortlistOutOfBounds { op_index: index });
+                }
+            }
+            ROUT_OP_HALT => {}
+            _ => {
+                return Err(R4G1Error::UnknownRoutingOp {
+                    offset: u32::try_from(cursor).unwrap_or(u32::MAX),
+                    opcode,
+                });
+            }
+        }
+        cursor += rout_op_size(opcode).ok_or(R4G1Error::UnknownRoutingOp {
+            offset: u32::try_from(cursor).unwrap_or(u32::MAX),
+            opcode,
+        })?;
+        index += 1;
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+struct NodeBounds {
     edge_count: u32,
     emit_remainder: usize,
     rout_words: u64,
@@ -682,50 +834,53 @@ fn validate_node(
     depth_count: u8,
     max_frontier: u16,
     max_emissions: u32,
-) -> Result<(), R4G1Error> {
-    if range_end(node.child_start, node.child_len) > u64::from(edge_count) {
+}
+
+fn validate_node(index: u32, node: R4G1Node, bounds: NodeBounds) -> Result<(), R4G1Error> {
+    if range_end(node.child_start, node.child_len) > u64::from(bounds.edge_count) {
         return Err(R4G1Error::NodeRangeOutOfBounds {
             node: index,
             field: R4G1RangeField::Child,
         });
     }
-    if range_end(node.forward_start, node.forward_len) > u64::from(edge_count) {
+    if range_end(node.forward_start, node.forward_len) > u64::from(bounds.edge_count) {
         return Err(R4G1Error::NodeRangeOutOfBounds {
             node: index,
             field: R4G1RangeField::Forward,
         });
     }
-    if range_end(node.emission_start, node.emission_len) > emit_remainder as u64 {
+    if range_end(node.emission_start, node.emission_len) > bounds.emit_remainder as u64 {
         return Err(R4G1Error::NodeRangeOutOfBounds {
             node: index,
             field: R4G1RangeField::Emission,
         });
     }
-    if u64::from(node.prototype_word_start) + u64::from(signature_words) > rout_words {
+    if u64::from(node.prototype_word_start) + u64::from(bounds.signature_words) > bounds.rout_words
+    {
         return Err(R4G1Error::NodeRangeOutOfBounds {
             node: index,
             field: R4G1RangeField::Prototype,
         });
     }
-    if u64::from(node.mask_word_start) + u64::from(signature_words) > rout_words {
+    if u64::from(node.mask_word_start) + u64::from(bounds.signature_words) > bounds.rout_words {
         return Err(R4G1Error::NodeRangeOutOfBounds {
             node: index,
             field: R4G1RangeField::Mask,
         });
     }
-    if node.child_len > max_frontier {
+    if node.child_len > bounds.max_frontier {
         return Err(R4G1Error::NodeBoundExceeded {
             node: index,
             field: R4G1RangeField::Child,
         });
     }
-    if u32::from(node.emission_len) > max_emissions {
+    if u32::from(node.emission_len) > bounds.max_emissions {
         return Err(R4G1Error::NodeBoundExceeded {
             node: index,
             field: R4G1RangeField::Emission,
         });
     }
-    if node.depth >= depth_count {
+    if node.depth >= bounds.depth_count {
         return Err(R4G1Error::NodeDepthOutOfBounds { node: index });
     }
     if node.flags != 0 {

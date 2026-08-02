@@ -305,3 +305,27 @@ id = "CX-10"
 level = "build"
 suite = "compatibility"
 statement = "R4G1 graph validation rejects node range and depth violations, ROUT word ranges, and out-of-bounds edge endpoints."
+
+[[id]]
+id = "CX-11"
+level = "build"
+suite = "compatibility"
+statement = "Typed download and compile entry points expose the R4 lifecycle surface while retaining pinned-source and validated-artifact checks."
+
+[[id]]
+id = "CX-12"
+level = "build"
+suite = "compatibility"
+statement = "Typed source compilation validates the local model and corpus before invoking the Python teacher bridge, then emits a validated artifact and parity report."
+
+[[id]]
+id = "CX-13"
+level = "build"
+suite = "compatibility"
+statement = "The borrowed R4G1 graph view validates ROUT v0 opcodes, termination, jumps, signature-word operands, and shortlist ranges against HEAD bounds."
+
+[[id]]
+id = "CX-14"
+level = "build"
+suite = "compatibility"
+statement = "The compiler emits a deterministic structural R4G1 container with canonical section layout and valid BLAKE3 HEAD and artifact CIDs."
