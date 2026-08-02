@@ -1088,7 +1088,15 @@ fn compiled_artifact_exports_to_structural_r4g1_with_valid_cids_cx_14() {
     let graph = R4G1Graph::parse(&exported.bytes).expect("exported graph validates");
 
     assert_eq!(graph.node_count(), exported.node_count);
-    assert_eq!(graph.edge_count(), 0);
+    assert_eq!(graph.edge_count(), exported.edge_count);
+    assert_eq!(graph.edge_count(), 3);
+    assert!(graph.node(0).is_some_and(|node| node.child_len > 0));
+    for edge_index in 0..graph.edge_count() {
+        let edge = graph.edge(edge_index).expect("exported edge exists");
+        assert_eq!(edge.kind, 0);
+        assert!(edge.src < edge.dst);
+        assert!(graph.reverse_edge_id(edge_index).is_some());
+    }
     assert_eq!(
         graph.identity().artifact_id().as_bytes(),
         &exported.artifact_cid
@@ -1144,5 +1152,27 @@ fn cli_compile_writes_optional_structural_r4g1_container_cx_15() {
     assert_eq!(
         fs::read(typed_output).expect("typed R4G1 output reads"),
         typed_export.bytes
+    );
+}
+
+#[test]
+fn r4g1_graph_view_validates_edge_flags_and_reverse_ids_cx_16() {
+    let valid = r4g1_graph_fixture();
+
+    let mut flags = valid.clone();
+    flags[477] = 1;
+    assert_eq!(
+        R4G1Graph::parse(&flags),
+        Err(R4G1Error::EdgeFlagsInvalid { edge: 0 })
+    );
+
+    let mut reverse = valid;
+    reverse[480..484].copy_from_slice(&1u32.to_le_bytes());
+    assert_eq!(
+        R4G1Graph::parse(&reverse),
+        Err(R4G1Error::ReverseIndexOutOfBounds {
+            index: 0,
+            edge_id: 1,
+        })
     );
 }

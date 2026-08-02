@@ -89,3 +89,9 @@ Feature: R4G1 and TLA5 compatibility bridge
     Given a valid observation corpus and `.uors` output path
     When the CLI compile command receives `--r4g1-output`
     Then it writes both validated artifact formats and reports the R4G1 identity
+
+  @CX-16 @build
+  Scenario: R4G1 graphs carry deterministic refinement edges and reverse indexes
+    Given compiled region paths and a canonical EDGE section
+    When the R4G1 graph view validates the emitted graph
+    Then refinement edges and reverse ranges resolve, while malformed flags or IDs fail

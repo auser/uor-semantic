@@ -112,6 +112,48 @@ pub enum R4G1Error {
         /// Edge record index.
         edge: u32,
     },
+    /// A canonical EDGE record carries nonzero flags in the v0 format.
+    EdgeFlagsInvalid {
+        /// Canonical edge record index.
+        edge: u32,
+    },
+    /// Canonical EDGE records are not strictly ordered by wire key.
+    EdgeCanonicalOrderViolation {
+        /// First record in the violated adjacent pair.
+        previous: u32,
+        /// Second record in the violated adjacent pair.
+        edge: u32,
+    },
+    /// An unknown mandatory edge-kind discriminant was encountered.
+    UnknownEdgeKind {
+        /// Canonical edge record index.
+        edge: u32,
+        /// Raw edge-kind discriminant.
+        kind: u8,
+    },
+    /// A reverse-index entry references an absent canonical edge.
+    ReverseIndexOutOfBounds {
+        /// Reverse-index position.
+        index: u32,
+        /// Referenced canonical edge index.
+        edge_id: u32,
+    },
+    /// A canonical edge requiring reverse coverage is absent from the index.
+    ReverseIndexMissing {
+        /// Canonical edge record index.
+        edge: u32,
+    },
+    /// A node's forward range resolves to an edge targeting another node.
+    ReverseRangeTargetMismatch {
+        /// Node whose forward range was inspected.
+        node: u32,
+        /// Reverse-index position.
+        index: u32,
+        /// Referenced canonical edge index.
+        edge_id: u32,
+        /// Actual edge destination.
+        edge_dst: u32,
+    },
     /// A checked fixed-width range calculation overflowed.
     RangeOverflow,
     /// A ROUT bytecode opcode is not defined by the v0 instruction set.
@@ -184,6 +226,16 @@ impl fmt::Display for R4G1Error {
             Self::NodeFlagsInvalid { .. } => "R4G1 node flags are invalid",
             Self::NodeBoundExceeded { .. } => "R4G1 node exceeds a HEAD bound",
             Self::EdgeEndpointOutOfBounds { .. } => "R4G1 edge endpoint is out of bounds",
+            Self::EdgeFlagsInvalid { .. } => "R4G1 edge flags are invalid",
+            Self::EdgeCanonicalOrderViolation { .. } => {
+                "R4G1 canonical EDGE records are out of order"
+            }
+            Self::UnknownEdgeKind { .. } => "R4G1 edge kind is unknown and mandatory",
+            Self::ReverseIndexOutOfBounds { .. } => "R4G1 reverse index entry is out of bounds",
+            Self::ReverseIndexMissing { .. } => "R4G1 canonical edge is absent from reverse index",
+            Self::ReverseRangeTargetMismatch { .. } => {
+                "R4G1 node reverse range targets the wrong destination"
+            }
             Self::RangeOverflow => "R4G1 range arithmetic overflowed",
             Self::UnknownRoutingOp { .. } => "R4G1 ROUT opcode is unknown",
             Self::TruncatedRoutingOp { .. } => "R4G1 ROUT instruction is truncated",
@@ -650,16 +702,7 @@ impl<'a> R4G1Graph<'a> {
             node += 1;
         }
 
-        let mut edge_cursor = 0usize;
-        let mut edge = 0u32;
-        while edge < edge_count {
-            let record = decode_edge(edge_bytes, edge_cursor);
-            if record.src >= node_count || record.dst >= node_count {
-                return Err(R4G1Error::EdgeEndpointOutOfBounds { edge });
-            }
-            edge_cursor += 16;
-            edge += 1;
-        }
+        validate_edges(edge_bytes, node_bytes, node_count, edge_count)?;
 
         Ok(Self {
             structure,
@@ -713,6 +756,17 @@ impl<'a> R4G1Graph<'a> {
         let bytes = self.structure.section(R4G1Section::Edge)?;
         let offset = record_offset(index, 16)?;
         Some(decode_edge(bytes, offset))
+    }
+
+    /// Returns one validated reverse-index edge ID without copying the section.
+    pub fn reverse_edge_id(&self, index: u32) -> Option<u32> {
+        if index >= self.edge_count {
+            return None;
+        }
+        let bytes = self.structure.section(R4G1Section::Edge)?;
+        let canonical_bytes = record_offset(self.edge_count, 16)?;
+        let offset = canonical_bytes.checked_add(record_offset(index, 4)?)?;
+        Some(read_u32(bytes, offset))
     }
 
     /// Returns one borrowed validated section body.
@@ -946,6 +1000,106 @@ fn decode_edge(bytes: &[u8], at: usize) -> R4G1Edge {
         flags: bytes[at + 13],
         reserved: read_u16(bytes, at + 14),
     }
+}
+
+fn validate_edges(
+    bytes: &[u8],
+    node_bytes: &[u8],
+    node_count: u32,
+    edge_count: u32,
+) -> Result<(), R4G1Error> {
+    let mut previous_key = None;
+    let mut edge = 0u32;
+    while edge < edge_count {
+        let offset = record_offset(edge, 16).ok_or(R4G1Error::RangeOverflow)?;
+        let record = decode_edge(bytes, offset);
+        if record.src >= node_count || record.dst >= node_count {
+            return Err(R4G1Error::EdgeEndpointOutOfBounds { edge });
+        }
+        if record.flags != 0 {
+            return Err(R4G1Error::EdgeFlagsInvalid { edge });
+        }
+        if record.kind > 8 && record.kind & 0x80 == 0 {
+            return Err(R4G1Error::UnknownEdgeKind {
+                edge,
+                kind: record.kind,
+            });
+        }
+        let key = (record.src, record.kind, record.dst, record.reserved);
+        if previous_key.is_some_and(|previous| previous >= key) {
+            return Err(R4G1Error::EdgeCanonicalOrderViolation {
+                previous: edge.saturating_sub(1),
+                edge,
+            });
+        }
+        previous_key = Some(key);
+        edge += 1;
+    }
+
+    let canonical_bytes = record_offset(edge_count, 16).ok_or(R4G1Error::RangeOverflow)?;
+    let mut reverse_position = 0u32;
+    while reverse_position < edge_count {
+        let reverse_offset = canonical_bytes
+            .checked_add(record_offset(reverse_position, 4).ok_or(R4G1Error::RangeOverflow)?)
+            .ok_or(R4G1Error::RangeOverflow)?;
+        let edge_id = read_u32(bytes, reverse_offset);
+        if edge_id >= edge_count {
+            return Err(R4G1Error::ReverseIndexOutOfBounds {
+                index: reverse_position,
+                edge_id,
+            });
+        }
+        reverse_position += 1;
+    }
+
+    let mut expected_edge = 0u32;
+    while expected_edge < edge_count {
+        let mut found = false;
+        let mut position = 0u32;
+        while position < edge_count {
+            let offset = canonical_bytes
+                .checked_add(record_offset(position, 4).ok_or(R4G1Error::RangeOverflow)?)
+                .ok_or(R4G1Error::RangeOverflow)?;
+            if read_u32(bytes, offset) == expected_edge {
+                found = true;
+                break;
+            }
+            position += 1;
+        }
+        if !found {
+            return Err(R4G1Error::ReverseIndexMissing {
+                edge: expected_edge,
+            });
+        }
+        expected_edge += 1;
+    }
+
+    let mut node = 0u32;
+    while node < node_count {
+        let node_offset = record_offset(node, 30).ok_or(R4G1Error::RangeOverflow)?;
+        let record = decode_node(node_bytes, node_offset);
+        let mut position = record.forward_start;
+        let end = range_end(record.forward_start, record.forward_len);
+        while u64::from(position) < end {
+            let reverse_offset = canonical_bytes
+                .checked_add(record_offset(position, 4).ok_or(R4G1Error::RangeOverflow)?)
+                .ok_or(R4G1Error::RangeOverflow)?;
+            let edge_id = read_u32(bytes, reverse_offset);
+            let edge_offset = record_offset(edge_id, 16).ok_or(R4G1Error::RangeOverflow)?;
+            let edge = decode_edge(bytes, edge_offset);
+            if edge.dst != node {
+                return Err(R4G1Error::ReverseRangeTargetMismatch {
+                    node,
+                    index: position,
+                    edge_id,
+                    edge_dst: edge.dst,
+                });
+            }
+            position = position.saturating_add(1);
+        }
+        node += 1;
+    }
+    Ok(())
 }
 
 fn validate_structure(bytes: &[u8], section_count: u32) -> Result<(), R4G1Error> {

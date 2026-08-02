@@ -2,8 +2,8 @@
 //!
 //! This bridge deliberately emits the bounded container shape and valid
 //! BLAKE3 identities, not a scored R4G1 certificate. The current semantic
-//! artifact has no target-compatible refinement/forward edge evidence or
-//! residual EXCT table, so those sections are represented conservatively.
+//! artifact has no target-compatible predictive edge evidence or residual
+//! EXCT table, so those parts remain represented conservatively.
 
 use core::fmt;
 
@@ -18,6 +18,8 @@ const SIGNATURE_WORDS: usize = 4;
 const SIGNATURE_BYTES: u16 = 32;
 const REGION_RECORD_BYTES: usize = 128;
 const EMISSION_RECORD_BYTES: usize = 8;
+const EDGE_RECORD_BYTES: usize = 16;
+const REVERSE_INDEX_ENTRY_BYTES: usize = 4;
 const REGION_OFFSET_FIELD: usize = 40;
 const EMISSION_OFFSET_FIELD: usize = 48;
 
@@ -101,12 +103,18 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
     let mut emit = vec![2, 0, 0, 0];
     let mut nodes = Vec::with_capacity(node_count);
     nodes.push(Node {
+        child_start: 0,
+        child_len: 0,
+        forward_start: 0,
+        forward_len: 0,
         emission_start: 0,
         emission_len: 0,
         prototype_word_start: 1,
         mask_word_start: 1 + node_count_u32 * SIGNATURE_WORDS as u32,
         radius: 0,
         depth: 0,
+        path: [0; 8],
+        path_len: 0,
     });
 
     let mut max_emissions = 0u32;
@@ -180,6 +188,10 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
             )
             .ok_or(R4G1ExportError::FormatLimit("ROUT mask offset overflow"))?;
         nodes.push(Node {
+            child_start: 0,
+            child_len: 0,
+            forward_start: 0,
+            forward_len: 0,
             emission_start: exported_emission_start,
             emission_len: u16::try_from(emission_len)
                 .map_err(|_| R4G1ExportError::FormatLimit("emission count exceeds u16"))?,
@@ -187,7 +199,86 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
             mask_word_start,
             radius: read_u16(source, 10)?,
             depth: source[8],
+            path: read_path(source),
+            path_len: source[9],
         });
+    }
+
+    let mut edges = Vec::with_capacity(region_count);
+    for node_index in 1..node_count {
+        let node = nodes
+            .get(node_index)
+            .ok_or(R4G1ExportError::FormatLimit("node index is out of bounds"))?;
+        let parent = if node.path_len <= 1 {
+            0
+        } else {
+            let parent_len = node.path_len - 1;
+            let mut found = None;
+            let mut candidate = 1usize;
+            while candidate < node_index {
+                let possible = nodes
+                    .get(candidate)
+                    .ok_or(R4G1ExportError::FormatLimit("parent node is out of bounds"))?;
+                if possible.path_len == parent_len
+                    && same_path_prefix(node, possible, usize::from(parent_len))
+                {
+                    found = Some(candidate);
+                    break;
+                }
+                candidate += 1;
+            }
+            found.ok_or(R4G1ExportError::FormatLimit(
+                "region path has no deterministic parent",
+            ))?
+        };
+        edges.push(Edge {
+            src: u32::try_from(parent)
+                .map_err(|_| R4G1ExportError::FormatLimit("edge source exceeds u32"))?,
+            dst: u32::try_from(node_index)
+                .map_err(|_| R4G1ExportError::FormatLimit("edge destination exceeds u32"))?,
+            kind: 0,
+        });
+    }
+    edges.sort_by_key(|edge| (edge.src, edge.kind, edge.dst));
+    let edge_count = u32::try_from(edges.len())
+        .map_err(|_| R4G1ExportError::FormatLimit("edge count exceeds u32"))?;
+    for (edge_index, edge) in edges.iter().enumerate() {
+        let source = nodes
+            .get_mut(edge.src as usize)
+            .ok_or(R4G1ExportError::FormatLimit(
+                "edge source node is out of bounds",
+            ))?;
+        if source.child_len == 0 {
+            source.child_start = u32::try_from(edge_index)
+                .map_err(|_| R4G1ExportError::FormatLimit("child edge index exceeds u32"))?;
+        }
+        source.child_len = source
+            .child_len
+            .checked_add(1)
+            .ok_or(R4G1ExportError::FormatLimit("child edge count exceeds u16"))?;
+    }
+    let mut reverse: Vec<u32> = (0..edge_count).collect();
+    reverse.sort_by_key(|edge_id| {
+        let edge = edges[*edge_id as usize];
+        (edge.dst, edge.src, edge.kind, *edge_id)
+    });
+    for (reverse_index, edge_id) in reverse.iter().copied().enumerate() {
+        let destination = edges[edge_id as usize].dst as usize;
+        let node = nodes
+            .get_mut(destination)
+            .ok_or(R4G1ExportError::FormatLimit(
+                "edge destination node is out of bounds",
+            ))?;
+        if node.forward_len == 0 {
+            node.forward_start = u32::try_from(reverse_index)
+                .map_err(|_| R4G1ExportError::FormatLimit("reverse index exceeds u32"))?;
+        }
+        node.forward_len = node
+            .forward_len
+            .checked_add(1)
+            .ok_or(R4G1ExportError::FormatLimit(
+                "forward edge count exceeds u16",
+            ))?;
     }
 
     let rout_words = 1usize
@@ -217,10 +308,10 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
 
     let mut node_section = Vec::with_capacity(node_count * NODE_RECORD_BYTES);
     for node in &nodes {
-        node_section.extend_from_slice(&0u32.to_le_bytes());
-        node_section.extend_from_slice(&0u16.to_le_bytes());
-        node_section.extend_from_slice(&0u32.to_le_bytes());
-        node_section.extend_from_slice(&0u16.to_le_bytes());
+        node_section.extend_from_slice(&node.child_start.to_le_bytes());
+        node_section.extend_from_slice(&node.child_len.to_le_bytes());
+        node_section.extend_from_slice(&node.forward_start.to_le_bytes());
+        node_section.extend_from_slice(&node.forward_len.to_le_bytes());
         node_section.extend_from_slice(&node.emission_start.to_le_bytes());
         node_section.extend_from_slice(&node.emission_len.to_le_bytes());
         node_section.extend_from_slice(&node.prototype_word_start.to_le_bytes());
@@ -228,6 +319,24 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
         node_section.extend_from_slice(&node.radius.to_le_bytes());
         node_section.push(node.depth);
         node_section.push(0);
+    }
+
+    let mut edge_section = Vec::with_capacity(
+        edges
+            .len()
+            .checked_mul(EDGE_RECORD_BYTES + REVERSE_INDEX_ENTRY_BYTES)
+            .ok_or(R4G1ExportError::FormatLimit("EDGE section size overflow"))?,
+    );
+    for edge in &edges {
+        edge_section.extend_from_slice(&edge.src.to_le_bytes());
+        edge_section.extend_from_slice(&edge.dst.to_le_bytes());
+        edge_section.extend_from_slice(&0i32.to_le_bytes());
+        edge_section.push(edge.kind);
+        edge_section.push(0);
+        edge_section.extend_from_slice(&0u16.to_le_bytes());
+    }
+    for edge_id in reverse {
+        edge_section.extend_from_slice(&edge_id.to_le_bytes());
     }
 
     let max_depth = nodes.iter().map(|node| node.depth).max().unwrap_or(0);
@@ -248,7 +357,7 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
     put_u32(&mut head, 188, max_emissions.max(1));
     put_u32(&mut head, 192, 1);
     put_u32(&mut head, 196, node_count_u32);
-    put_u32(&mut head, 200, 0);
+    put_u32(&mut head, 200, edge_count);
     head[204] = depth_count;
     put_u16(&mut head, 212, SIGNATURE_BYTES);
     put_u32(&mut head, 220, vocab_size);
@@ -258,7 +367,7 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
         (1u32, head.as_slice()),
         (2u32, &[0u8][..]),
         (3u32, node_section.as_slice()),
-        (4u32, &[][..]),
+        (4u32, edge_section.as_slice()),
         (5u32, rout.as_slice()),
         (6u32, emit.as_slice()),
         (8u32, prov.as_slice()),
@@ -282,7 +391,7 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
         artifact_cid,
         head_cid,
         node_count: node_count_u32,
-        edge_count: 0,
+        edge_count,
     })
 }
 
@@ -305,12 +414,40 @@ pub fn verify_r4g1_cids(bytes: &[u8]) -> Result<(), R4G1ExportError> {
 
 #[derive(Clone, Copy)]
 struct Node {
+    child_start: u32,
+    child_len: u16,
+    forward_start: u32,
+    forward_len: u16,
     emission_start: u32,
     emission_len: u16,
     prototype_word_start: u32,
     mask_word_start: u32,
     radius: u16,
     depth: u8,
+    path: [u16; 8],
+    path_len: u8,
+}
+
+#[derive(Clone, Copy)]
+struct Edge {
+    src: u32,
+    dst: u32,
+    kind: u8,
+}
+
+fn read_path(bytes: &[u8]) -> [u16; 8] {
+    let mut path = [0u16; 8];
+    let mut index = 0usize;
+    while index < path.len() {
+        let offset = 84 + index * 2;
+        path[index] = u16::from_le_bytes([bytes[offset], bytes[offset + 1]]);
+        index += 1;
+    }
+    path
+}
+
+fn same_path_prefix(left: &Node, right: &Node, length: usize) -> bool {
+    left.path[..length] == right.path[..length]
 }
 
 fn emit_container(sections: &[(u32, &[u8])]) -> Result<Vec<u8>, R4G1ExportError> {

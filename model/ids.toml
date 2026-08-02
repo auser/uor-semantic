@@ -335,3 +335,9 @@ id = "CX-15"
 level = "build"
 suite = "compatibility"
 statement = "The CLI compile commands write the validated `.uors` artifact and an optional structural R4G1 container through a typed output path."
+
+[[id]]
+id = "CX-16"
+level = "build"
+suite = "compatibility"
+statement = "R4G1 export derives deterministic refinement edges and reverse-index ranges, while the borrowed graph view rejects invalid edge flags and reverse IDs."
