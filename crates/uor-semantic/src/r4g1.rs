@@ -228,6 +228,8 @@ pub enum R4G1Error {
         /// Requested node index.
         node: u32,
     },
+    /// The EMIT root-prior header or entry range is malformed.
+    RootPriorMalformed,
 }
 
 impl fmt::Display for R4G1Error {
@@ -287,6 +289,7 @@ impl fmt::Display for R4G1Error {
             Self::EmissionEncodingUnsupported => "R4G1 EMIT encoding is unsupported",
             Self::EmissionCapacityExceeded => "R4G1 emission capacity was exceeded",
             Self::NodeOutOfBounds { .. } => "R4G1 node index is out of bounds",
+            Self::RootPriorMalformed => "R4G1 EMIT root prior is malformed",
         };
         formatter.write_str(message)
     }
@@ -474,6 +477,98 @@ impl<const CAPACITY: usize> Default for R4G1Emissions<CAPACITY> {
     fn default() -> Self {
         Self::new()
     }
+}
+
+/// Caller-owned bounded top-K token scores produced by R4G1 prediction.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct R4G1Predictions<const CAPACITY: usize> {
+    entries: [R4G1Emission; CAPACITY],
+    len: usize,
+    truncated: usize,
+}
+
+impl<const CAPACITY: usize> R4G1Predictions<CAPACITY> {
+    /// Creates an empty prediction result.
+    pub const fn new() -> Self {
+        Self {
+            entries: [R4G1Emission {
+                token: 0,
+                score_q: i32::MIN,
+            }; CAPACITY],
+            len: 0,
+            truncated: 0,
+        }
+    }
+
+    /// Returns initialized entries ordered by descending score, then token ID.
+    pub fn as_slice(&self) -> &[R4G1Emission] {
+        &self.entries[..self.len]
+    }
+
+    /// Returns the highest-ranked prediction, when one exists.
+    pub fn first(&self) -> Option<R4G1Emission> {
+        self.as_slice().first().copied()
+    }
+
+    /// Returns entries displaced by the caller's top-K capacity.
+    pub const fn truncated(&self) -> usize {
+        self.truncated
+    }
+
+    /// Clears the result while preserving caller-owned storage.
+    pub fn clear(&mut self) {
+        self.len = 0;
+        self.truncated = 0;
+    }
+
+    fn accumulate(&mut self, entry: R4G1Emission) {
+        let mut index = 0usize;
+        while index < self.len {
+            if self.entries[index].token == entry.token {
+                if entry.score_q > self.entries[index].score_q {
+                    self.entries[index] = entry;
+                    self.sort_initialized();
+                }
+                return;
+            }
+            index += 1;
+        }
+
+        if self.len < CAPACITY {
+            self.entries[self.len] = entry;
+            self.len += 1;
+            self.sort_initialized();
+            return;
+        }
+
+        self.truncated = self.truncated.saturating_add(1);
+        if CAPACITY != 0 && precedes(entry, self.entries[CAPACITY - 1]) {
+            self.entries[CAPACITY - 1] = entry;
+            self.sort_initialized();
+        }
+    }
+
+    fn sort_initialized(&mut self) {
+        let mut outer = 1usize;
+        while outer < self.len {
+            let mut inner = outer;
+            while inner > 0 && precedes(self.entries[inner], self.entries[inner - 1]) {
+                self.entries.swap(inner, inner - 1);
+                inner -= 1;
+            }
+            outer += 1;
+        }
+    }
+}
+
+impl<const CAPACITY: usize> Default for R4G1Predictions<CAPACITY> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+fn precedes(left: R4G1Emission, right: R4G1Emission) -> bool {
+    left.score_q > right.score_q || (left.score_q == right.score_q && left.token < right.token)
 }
 
 impl R4G1Section {
@@ -1030,23 +1125,7 @@ impl<'a> R4G1Graph<'a> {
                 section: R4G1Section::Emit,
             })?;
         validate_emission_encoding(emit)?;
-        let start = 4usize
-            .checked_add(
-                usize::try_from(node.emission_start).map_err(|_| R4G1Error::RangeOverflow)?,
-            )
-            .ok_or(R4G1Error::RangeOverflow)?;
-        let byte_len = usize::from(node.emission_len)
-            .checked_shl(3)
-            .ok_or(R4G1Error::RangeOverflow)?;
-        let end = start
-            .checked_add(byte_len)
-            .ok_or(R4G1Error::RangeOverflow)?;
-        let bytes = emit
-            .get(start..end)
-            .ok_or(R4G1Error::NodeRangeOutOfBounds {
-                node: node_index,
-                field: R4G1RangeField::Emission,
-            })?;
+        let bytes = self.node_emission_bytes(emit, node_index, node)?;
         let mut offset = 0usize;
         while offset < bytes.len() {
             let token = read_u32(bytes, offset);
@@ -1056,6 +1135,59 @@ impl<'a> R4G1Graph<'a> {
                 score_q: decode_score(raw_score, emit[1], read_i16(emit, 2))?,
             })?;
             offset += 8;
+        }
+        Ok(())
+    }
+
+    /// Reads the section-level root-prior entries into caller-owned storage.
+    pub fn root_emissions<const CAPACITY: usize>(
+        &self,
+        emissions: &mut R4G1Emissions<CAPACITY>,
+    ) -> Result<(), R4G1Error> {
+        emissions.clear();
+        let bytes = self.root_emission_bytes()?;
+        let mut offset = 0usize;
+        while offset < bytes.len() {
+            emissions.push(R4G1Emission {
+                token: read_u32(bytes, offset),
+                score_q: read_i32(bytes, offset + 4),
+            })?;
+            offset += 8;
+        }
+        Ok(())
+    }
+
+    /// Predicts deterministic top-K tokens from root-prior and routed EMIT data.
+    ///
+    /// The caller owns both bounded buffers. Each token is retained once, using
+    /// the highest available fixed-point score from the root prior or a routed
+    /// node emission; ties are ordered by ascending token ID. This merge policy
+    /// is deliberately conservative for this bridge because exported node
+    /// entries are absolute scores, not target-graded residual contributions.
+    pub fn predict_top_k<const WORDS: usize, const ROUTE_CAPACITY: usize, const CAPACITY: usize>(
+        &self,
+        signature: &[u64; WORDS],
+        candidates: &mut R4G1RouteCandidates<ROUTE_CAPACITY>,
+        predictions: &mut R4G1Predictions<CAPACITY>,
+    ) -> Result<(), R4G1Error> {
+        predictions.clear();
+        self.route(signature, candidates)?;
+
+        let root = self.root_emission_bytes()?;
+        accumulate_emission_bytes(root, predictions);
+
+        let emit = self
+            .structure
+            .section(R4G1Section::Emit)
+            .ok_or(R4G1Error::SectionTooShort {
+                section: R4G1Section::Emit,
+            })?;
+        for &candidate in candidates.as_slice() {
+            let node = self
+                .node(candidate)
+                .ok_or(R4G1Error::RoutingCandidateOutOfBounds { candidate })?;
+            let bytes = self.node_emission_bytes(emit, candidate, node)?;
+            accumulate_emission_bytes(bytes, predictions);
         }
         Ok(())
     }
@@ -1084,6 +1216,48 @@ impl<'a> R4G1Graph<'a> {
             offset += 4;
         }
         Ok(())
+    }
+
+    fn root_emission_bytes(&self) -> Result<&'a [u8], R4G1Error> {
+        let emit = self
+            .structure
+            .section(R4G1Section::Emit)
+            .ok_or(R4G1Error::SectionTooShort {
+                section: R4G1Section::Emit,
+            })?;
+        validate_emission_encoding(emit)?;
+        if emit.len() < 20 {
+            return Err(R4G1Error::RootPriorMalformed);
+        }
+        let count = usize::try_from(read_u32(emit, 4)).map_err(|_| R4G1Error::RangeOverflow)?;
+        let byte_len = count.checked_shl(3).ok_or(R4G1Error::RangeOverflow)?;
+        let end = 20usize
+            .checked_add(byte_len)
+            .ok_or(R4G1Error::RootPriorMalformed)?;
+        emit.get(20..end).ok_or(R4G1Error::RootPriorMalformed)
+    }
+
+    fn node_emission_bytes(
+        &self,
+        emit: &'a [u8],
+        node_index: u32,
+        node: R4G1Node,
+    ) -> Result<&'a [u8], R4G1Error> {
+        let start = 4usize
+            .checked_add(
+                usize::try_from(node.emission_start).map_err(|_| R4G1Error::RangeOverflow)?,
+            )
+            .ok_or(R4G1Error::RangeOverflow)?;
+        let byte_len = usize::from(node.emission_len)
+            .checked_shl(3)
+            .ok_or(R4G1Error::RangeOverflow)?;
+        let end = start
+            .checked_add(byte_len)
+            .ok_or(R4G1Error::RangeOverflow)?;
+        emit.get(start..end).ok_or(R4G1Error::NodeRangeOutOfBounds {
+            node: node_index,
+            field: R4G1RangeField::Emission,
+        })
     }
 
     fn node_accepts<const WORDS: usize>(
@@ -1633,6 +1807,20 @@ fn validate_emission_encoding(bytes: &[u8]) -> Result<(), R4G1Error> {
         return Err(R4G1Error::EmissionEncodingUnsupported);
     }
     Ok(())
+}
+
+fn accumulate_emission_bytes<const CAPACITY: usize>(
+    bytes: &[u8],
+    predictions: &mut R4G1Predictions<CAPACITY>,
+) {
+    let mut offset = 0usize;
+    while offset < bytes.len() {
+        predictions.accumulate(R4G1Emission {
+            token: read_u32(bytes, offset),
+            score_q: read_i32(bytes, offset + 4),
+        });
+        offset += 8;
+    }
 }
 
 fn decode_score(raw: i32, shift_byte: u8, zero_point: i16) -> Result<i32, R4G1Error> {

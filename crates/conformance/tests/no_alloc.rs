@@ -186,3 +186,50 @@ fn r4g1_route_and_emit_perform_zero_heap_operations_cx_21() {
     assert_eq!(allocations_after, allocations_before);
     assert_eq!(deallocations_after, deallocations_before);
 }
+
+#[test]
+fn r4g1_prediction_performs_zero_heap_operations_cx_22() {
+    let _guard = TEST_LOCK.lock().expect("allocator test lock");
+    use uor_semantic::{R4G1Graph, R4G1Predictions, R4G1RouteCandidates, context_signature};
+    use uor_semantic_compiler::{CompilerConfig, ObservationCorpus, compile, export_r4g1};
+
+    let corpus = ObservationCorpus::parse(concat!(
+        "UOROBS1\n",
+        "model=fixture/model\n",
+        "revision=0123456789abcdef0123456789abcdef01234567\n",
+        "source_sha256=0000000000000000000000000000000000000000000000000000000000000001\n",
+        "max_context=4\n",
+        "top_k=2\n",
+        "tokenizer_sha256=0000000000000000000000000000000000000000000000000000000000000001\n",
+        "chat_template_sha256=0000000000000000000000000000000000000000000000000000000000000002\n",
+        "special_tokens_sha256=0000000000000000000000000000000000000000000000000000000000000003\n",
+        "eos_token=2\n",
+        "--\n",
+        "O|1,2|3|3:0,4:-10\n",
+        "O|1,2,3|4|4:0,5:-10\n",
+    ))
+    .expect("fixture parses");
+    let compiled = compile(&corpus, CompilerConfig::accuracy()).expect("fixture compiles");
+    let exported = export_r4g1(&compiled).expect("R4G1 export succeeds");
+    let graph = R4G1Graph::parse(&exported.bytes).expect("R4G1 graph validates");
+    let signature = context_signature(&[1, 2]);
+    let mut candidates = R4G1RouteCandidates::<8>::new();
+    let mut predictions = R4G1Predictions::<4>::new();
+
+    graph
+        .predict_top_k(&signature, &mut candidates, &mut predictions)
+        .expect("prediction warms");
+    let allocations_before = ALLOCATIONS.load(Ordering::SeqCst);
+    let deallocations_before = DEALLOCATIONS.load(Ordering::SeqCst);
+    for _iteration in 0..1_024 {
+        graph
+            .predict_top_k(black_box(&signature), &mut candidates, &mut predictions)
+            .expect("prediction succeeds");
+        black_box(predictions.as_slice());
+    }
+    let allocations_after = ALLOCATIONS.load(Ordering::SeqCst);
+    let deallocations_after = DEALLOCATIONS.load(Ordering::SeqCst);
+
+    assert_eq!(allocations_after, allocations_before);
+    assert_eq!(deallocations_after, deallocations_before);
+}

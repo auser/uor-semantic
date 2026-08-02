@@ -98,7 +98,7 @@ pub use ids::{CodebookId, Depth, MembershipMargin, PathId, RegionId, SemanticSlo
 pub use path::{PathError, SemanticPath, SemanticPathView};
 pub use r4g1::{
     R4G1Edge, R4G1Emission, R4G1Emissions, R4G1Error, R4G1Graph, R4G1Identity, R4G1Node,
-    R4G1RangeField, R4G1RouteCandidates, R4G1Section, R4G1Structure,
+    R4G1Predictions, R4G1RangeField, R4G1RouteCandidates, R4G1Section, R4G1Structure,
 };
 pub use region::{Region, masked_hamming};
 pub use router::{CandidateSet, CandidateSetError, ReferenceRouter, RouteSummary};

@@ -9,8 +9,8 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 use uor_semantic::{
-    ArtifactPredictScratch, ArtifactView, ExactPolicy, GenerationState, Prediction,
-    generate_greedy_into,
+    ArtifactPredictScratch, ArtifactView, ExactPolicy, GenerationState, Prediction, R4G1Graph,
+    R4G1Predictions, R4G1RouteCandidates, context_signature, generate_greedy_into,
 };
 use uor_semantic_compiler::{
     CompiledArtifact, CompilerConfig, MAX_ROLLOUT_TOKENS, ObservationCorpus, ParityReport,
@@ -47,6 +47,8 @@ pub enum CliError {
     R4G1Export(R4G1ExportError),
     /// R4G1 replay verification failed.
     R4G1Replay(R4G1ReplayError),
+    /// R4G1 graph prediction failed.
+    R4G1Prediction(uor_semantic::R4G1Error),
     /// An external command exited unsuccessfully.
     ProcessFailed {
         /// Program that failed.
@@ -92,6 +94,7 @@ impl fmt::Display for CliError {
             Self::Generation(error) => write!(formatter, "generation error: {error}"),
             Self::R4G1Export(error) => write!(formatter, "R4G1 export error: {error}"),
             Self::R4G1Replay(error) => write!(formatter, "R4G1 replay error: {error}"),
+            Self::R4G1Prediction(error) => write!(formatter, "R4G1 prediction error: {error}"),
             Self::ProcessFailed {
                 program,
                 code,
@@ -177,6 +180,12 @@ impl From<R4G1ExportError> for CliError {
 impl From<R4G1ReplayError> for CliError {
     fn from(error: R4G1ReplayError) -> Self {
         Self::R4G1Replay(error)
+    }
+}
+
+impl From<uor_semantic::R4G1Error> for CliError {
+    fn from(error: uor_semantic::R4G1Error) -> Self {
+        Self::R4G1Prediction(error)
     }
 }
 
@@ -425,6 +434,7 @@ fn print_help() {
         "  self-test\n",
         "  artifact inspect <artifact>\n",
         "  artifact replay <artifact> --r4g1 <container>\n",
+        "  artifact predict-r4g1 <container> --tokens <csv> [--top-k <n>]\n",
         "  artifact predict <artifact> --tokens <csv> [--graph-only]\n",
         "  artifact generate <artifact> --tokens <csv> --max-tokens <n>\n",
         "  model download <repo> --revision <40-hex> --output <dir>\n",
@@ -514,6 +524,17 @@ fn command_artifact(arguments: &[String]) -> Result<(), CliError> {
             let artifact = required_positional(arguments, 1, "artifact path")?;
             let r4g1 = required_option(arguments, "--r4g1")?;
             artifact_replay(Path::new(artifact), Path::new(r4g1))
+        }
+        "predict-r4g1" => {
+            let path = required_positional(arguments, 1, "R4G1 container path")?;
+            let tokens = parse_tokens(required_option(arguments, "--tokens")?)?;
+            let top_k = parse_optional_usize(arguments, "--top-k", 8)?;
+            if top_k == 0 || top_k > 64 {
+                return Err(CliError::InvalidValue(
+                    "top-k must be between 1 and 64".to_owned(),
+                ));
+            }
+            artifact_predict_r4g1(Path::new(path), &tokens, top_k)
         }
         "predict" => {
             let path = required_positional(arguments, 1, "artifact path")?;
@@ -646,6 +667,21 @@ fn artifact_replay(artifact_path: &Path, r4g1_path: &Path) -> Result<(), CliErro
         report.score_agreement_basis_points()
     );
     println!("complete: {}", report.is_complete());
+    Ok(())
+}
+
+fn artifact_predict_r4g1(path: &Path, tokens: &[u32], top_k: usize) -> Result<(), CliError> {
+    let bytes = std::fs::read(path)?;
+    let graph = R4G1Graph::parse(&bytes)?;
+    let signature = context_signature(tokens);
+    let mut candidates = R4G1RouteCandidates::<64>::new();
+    let mut predictions = R4G1Predictions::<64>::new();
+    graph.predict_top_k(&signature, &mut candidates, &mut predictions)?;
+    println!("routed_candidates: {}", candidates.as_slice().len());
+    println!("truncated_predictions: {}", predictions.truncated());
+    for entry in predictions.as_slice().iter().take(top_k) {
+        println!("{}\t{}", entry.token, entry.score_q);
+    }
     Ok(())
 }
 

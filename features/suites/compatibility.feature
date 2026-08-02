@@ -125,3 +125,9 @@ Feature: R4G1 and TLA5 compatibility bridge
     Given a validated R4G1 graph with a bounded shortlist and fixed-point emissions
     When the no_std graph view routes a signature and reads a node emission
     Then matching candidates and fixed-point scores are returned through caller-owned buffers
+
+  @CX-22 @build
+  Scenario: R4G1 runtime predicts bounded top-K tokens
+    Given a validated R4G1 graph with root-prior and routed emissions
+    When the no_std graph view predicts from a signature
+    Then deterministic token scores are returned in caller-owned top-K order

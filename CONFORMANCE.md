@@ -63,6 +63,7 @@ lowercased ID.
 | `CX-19` | `build` | R4G1 export emits bounded predictive kind-2 edges from deterministic exact-context continuations, carrying accumulator-derived fixed-point scores while keeping refinement child ranges valid. |
 | `CX-20` | `build` | A bounded R4G1 replay certificate recomputes predictive transitions from the validated artifact, reports emitted-edge coverage and fixed-point score agreement, and does not claim target replay equivalence. |
 | `CX-21` | `build` | The no_std R4G1 graph view executes bounded ROUT v0 shortlists, filters candidates by masked Hamming distance, and decodes caller-buffered fixed-point EMIT entries without heap allocation. |
+| `CX-22` | `build` | The no_std R4G1 graph view produces deterministic bounded top-K token predictions by merging root-prior and routed EMIT scores through caller-owned buffers. |
 
 ## compiler
 

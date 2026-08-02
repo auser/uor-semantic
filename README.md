@@ -168,6 +168,12 @@ provides `artifact replay <artifact> --r4g1 <container>` as a bounded exporter
 replay certificate: it recomputes source predictive transitions and reports
 edge coverage plus fixed-point score agreement, but does not claim parity with
 the separate R4 target runtime or teacher.
+The no-heap graph view also exposes bounded top-K prediction: it merges the
+root-prior and routed EMIT entries by token, keeps the highest available score,
+and returns deterministic score/token ordering through caller-owned buffers.
+This is an executable graph prediction primitive, not target residual algebra;
+the 288-bit graded route-code mapping and target replay certificate remain
+unimplemented.
 The published `no_std` core now also exposes the bounded R4G1 residual-scoring
 semantics: signed saturation, evidence-ID de-duplication, capacity errors, and
 deterministic score/ID ordering.

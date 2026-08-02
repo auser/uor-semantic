@@ -371,3 +371,9 @@ id = "CX-21"
 level = "build"
 suite = "compatibility"
 statement = "The no_std R4G1 graph view executes bounded ROUT v0 shortlists, filters candidates by masked Hamming distance, and decodes caller-buffered fixed-point EMIT entries without heap allocation."
+
+[[id]]
+id = "CX-22"
+level = "build"
+suite = "compatibility"
+statement = "The no_std R4G1 graph view produces deterministic bounded top-K token predictions by merging root-prior and routed EMIT scores through caller-owned buffers."

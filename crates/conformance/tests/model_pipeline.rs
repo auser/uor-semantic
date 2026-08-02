@@ -9,9 +9,9 @@ use uor_semantic::{
     CompatibilityFormat, CompatibilityManifest, CompatibilityPrediction, CompatibilityWitness,
     Depth, ExactPolicy, GenerationState, MAX_EMISSION_RECORDS, MAX_EXACT_RECORDS,
     MAX_REGION_RECORDS, Prediction, PredictionSource, R4G1Emissions, R4G1Error, R4G1Graph,
-    R4G1Identity, R4G1RangeField, R4G1RouteCandidates, R4G1Section, R4G1Structure, R4Status,
-    ResidualContribution, ResidualContributionKind, ScoreAccumulator, ScoreQ, ScoringError,
-    TokenScore, context_signature, generate_greedy_into,
+    R4G1Identity, R4G1Predictions, R4G1RangeField, R4G1RouteCandidates, R4G1Section, R4G1Structure,
+    R4Status, ResidualContribution, ResidualContributionKind, ScoreAccumulator, ScoreQ,
+    ScoringError, TokenScore, context_signature, generate_greedy_into,
 };
 use uor_semantic_cli::{
     CaptureOptions, CompileRequest as CliCompileRequest, DownloadRequest, SourceCompileRequest,
@@ -612,8 +612,15 @@ fn interactive_artifact_commands_succeed_cl_02() {
         "uor-semantic-interactive-{}.uors",
         std::process::id()
     ));
+    let r4g1_path = std::env::temp_dir().join(format!(
+        "uor-semantic-interactive-{}.r4g1",
+        std::process::id()
+    ));
     fs::write(&artifact_path, &compiled.bytes).expect("artifact writes");
+    let exported = export_r4g1(&compiled).expect("R4G1 export succeeds");
+    fs::write(&r4g1_path, &exported.bytes).expect("R4G1 writes");
     let artifact = artifact_path.display().to_string();
+    let r4g1 = r4g1_path.display().to_string();
 
     uor_semantic_cli::run(&[
         "artifact".to_owned(),
@@ -632,6 +639,16 @@ fn interactive_artifact_commands_succeed_cl_02() {
     .expect("predict succeeds");
     uor_semantic_cli::run(&[
         "artifact".to_owned(),
+        "predict-r4g1".to_owned(),
+        r4g1,
+        "--tokens".to_owned(),
+        "1,2".to_owned(),
+        "--top-k".to_owned(),
+        "4".to_owned(),
+    ])
+    .expect("R4G1 predict succeeds");
+    uor_semantic_cli::run(&[
+        "artifact".to_owned(),
         "generate".to_owned(),
         artifact.clone(),
         "--tokens".to_owned(),
@@ -642,6 +659,7 @@ fn interactive_artifact_commands_succeed_cl_02() {
     .expect("generate succeeds");
 
     fs::remove_file(artifact_path).expect("artifact removes");
+    fs::remove_file(r4g1_path).expect("R4G1 removes");
 }
 
 #[test]
@@ -1403,4 +1421,25 @@ fn r4g1_runtime_replays_route_and_emit_without_allocation_cx_21() {
     assert!(!emissions.as_slice().is_empty());
     assert_eq!(emissions.as_slice()[0].token, 3);
     assert!(emissions.as_slice()[0].score_q <= 0);
+}
+
+#[test]
+fn r4g1_runtime_predicts_bounded_top_k_tokens_cx_22() {
+    let compiled = compile(&train(), CompilerConfig::accuracy()).expect("fixture compiles");
+    let exported = export_r4g1(&compiled).expect("structural R4G1 export succeeds");
+    let graph = R4G1Graph::parse(&exported.bytes).expect("exported graph validates");
+    let signature = context_signature(&[1, 2]);
+    let mut candidates = R4G1RouteCandidates::<8>::new();
+    let mut predictions = R4G1Predictions::<4>::new();
+
+    graph
+        .predict_top_k(&signature, &mut candidates, &mut predictions)
+        .expect("R4G1 prediction succeeds");
+    let entries = predictions.as_slice();
+    assert!(!entries.is_empty());
+    assert_eq!(entries[0].token, 3);
+    assert!(entries.windows(2).all(|pair| {
+        pair[0].score_q > pair[1].score_q
+            || (pair[0].score_q == pair[1].score_q && pair[0].token < pair[1].token)
+    }));
 }
