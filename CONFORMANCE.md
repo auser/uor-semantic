@@ -64,6 +64,7 @@ lowercased ID.
 | `CX-20` | `build` | A bounded R4G1 replay certificate recomputes predictive transitions from the validated artifact, reports emitted-edge coverage and fixed-point score agreement, and does not claim target replay equivalence. |
 | `CX-21` | `build` | The no_std R4G1 graph view executes bounded ROUT v0 shortlists, filters candidates by masked Hamming distance, and decodes caller-buffered fixed-point EMIT entries without heap allocation. |
 | `CX-22` | `build` | The no_std R4G1 graph view produces deterministic bounded top-K token predictions by merging root-prior and routed EMIT scores through caller-owned buffers. |
+| `CX-23` | `build` | The R4G1 bridge emits target-width 36-byte signatures and applies saturating parent-relative EMIT residuals along one deterministic refinement chain without claiming target graded class-code parity. |
 
 ## compiler
 

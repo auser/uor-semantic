@@ -157,23 +157,22 @@ canonical aligned sections and verified BLAKE3 HEAD and artifact CIDs. This is
 the interchange boundary, and `compile`/`model compile` can write it with
 `--r4g1-output`. It emits structural refinement and bounded predictive kind-2
 edges, a target-framed EMIT root prior, and an RX1-framed EXCT table from
-synthetic route-code projections.
+synthetic route-code projections. Exported ROUT signatures use the target
+36-byte width in five words; the existing semantic signature supplies 32 bytes
+and the remaining four bytes are explicit zero padding.
 The ROUT section is executable by the published no-heap graph view: it routes
 through a bounded shortlist, applies masked-Hamming prototype checks, and
-returns candidates through caller-owned storage; the same view decodes the
-fixed-point EMIT entries for a selected node. It is not scored R4G1 equivalence:
-target graded codes, predictive scoring
-certificates, and target replay parity remain future work. The repository now
+returns candidates through caller-owned storage. The graph predictor starts
+from the root fixed-point prior, then applies parent-relative EMIT residuals
+for the deepest deterministic refinement chain using saturating addition, with
+bounded top-K output in caller-owned storage. The repository now
 provides `artifact replay <artifact> --r4g1 <container>` as a bounded exporter
 replay certificate: it recomputes source predictive transitions and reports
 edge coverage plus fixed-point score agreement, but does not claim parity with
 the separate R4 target runtime or teacher.
-The no-heap graph view also exposes bounded top-K prediction: it merges the
-root-prior and routed EMIT entries by token, keeps the highest available score,
-and returns deterministic score/token ordering through caller-owned buffers.
-This is an executable graph prediction primitive, not target residual algebra;
-the 288-bit graded route-code mapping and target replay certificate remain
-unimplemented.
+This is an executable residual-scoring bridge, not full target parity: the
+target four-stage graded class-code assignment still requires the target
+per-stage class-signature books, which are not present in this repository.
 The published `no_std` core now also exposes the bounded R4G1 residual-scoring
 semantics: signed saturation, evidence-ID de-duplication, capacity errors, and
 deterministic score/ID ordering.

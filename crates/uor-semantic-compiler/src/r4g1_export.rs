@@ -1,13 +1,14 @@
 //! Canonical structural R4G1 export for compiled semantic artifacts.
 //!
 //! This bridge emits the bounded container shape, executable fallback ROUT
-//! shortlist, and valid BLAKE3 identities, not a scored R4G1 certificate. The
-//! emitted EMIT root prior and RX1-framed EXCT table are structural evidence
-//! derived from the semantic artifact; their synthetic route-code keys are not
-//! target graded codes and therefore do not claim scored R4G1 equivalence.
+//! shortlist, target-width R4G1 signature storage, and valid BLAKE3 identities.
+//! The EMIT root prior is a fixed-point base and each refinement node stores a
+//! parent-relative residual; the no-heap graph view applies one deterministic
+//! chain with saturating addition. Synthetic route-code keys are not target
+//! graded codes and therefore do not claim full scored R4G1 equivalence.
 //! Predictive kind-2 edges are emitted only from deterministic continuation
 //! evidence. The replay certificate below checks this exporter/source
-//! boundary, not target runtime equivalence.
+//! boundary, not target class-code assignment or teacher runtime equivalence.
 
 use core::fmt;
 use std::collections::BTreeMap;
@@ -22,8 +23,9 @@ const SECTION_ENTRY_BYTES: usize = 16;
 const ALIGNMENT_LOG2: usize = 3;
 const HEAD_BYTES: usize = 224;
 const NODE_RECORD_BYTES: usize = 30;
-const SIGNATURE_WORDS: usize = 4;
-const SIGNATURE_BYTES: u16 = 32;
+const SOURCE_SIGNATURE_WORDS: usize = 4;
+const R4G1_SIGNATURE_WORDS: usize = 5;
+const R4G1_SIGNATURE_BYTES: u16 = 36;
 const REGION_RECORD_BYTES: usize = 128;
 const EMISSION_RECORD_BYTES: usize = 8;
 const EDGE_RECORD_BYTES: usize = 16;
@@ -319,7 +321,7 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
     let emission_offset = usize::try_from(emission_offset)
         .map_err(|_| R4G1ExportError::FormatLimit("emission offset exceeds usize"))?;
 
-    let mut region_emit = Vec::new();
+    let mut region_emissions: Vec<Vec<(u32, i32)>> = Vec::with_capacity(region_count);
     let mut root_scores: BTreeMap<u32, (i64, u32)> = BTreeMap::new();
     let mut nodes = Vec::with_capacity(node_count);
     let shortlist_words = u32::try_from(region_count)
@@ -334,7 +336,7 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
     let mask_word_base = prototype_word_base
         .checked_add(
             node_count_u32
-                .checked_mul(SIGNATURE_WORDS as u32)
+                .checked_mul(R4G1_SIGNATURE_WORDS as u32)
                 .ok_or(R4G1ExportError::FormatLimit("ROUT mask offset overflow"))?,
         )
         .ok_or(R4G1ExportError::FormatLimit("ROUT mask offset overflow"))?;
@@ -390,28 +392,27 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
             .ok_or(R4G1ExportError::FormatLimit(
                 "emission records are out of bounds",
             ))?;
-        let exported_emission_start = region_emit.len();
-        let exported_emission_start = u32::try_from(exported_emission_start)
-            .map_err(|_| R4G1ExportError::FormatLimit("emission offset exceeds u32"))?;
+        let mut source_entries = Vec::with_capacity(emission_len);
         for entry in source_emissions.chunks_exact(EMISSION_RECORD_BYTES) {
             let token = read_u32(entry, 0)?;
             if token > i32::MAX as u32 {
                 return Err(R4G1ExportError::TokenOutOfRange { token });
             }
             max_token = Some(max_token.map_or(token, |current: u32| current.max(token)));
-            region_emit.extend_from_slice(entry);
             let score = read_i32(entry, 4)?;
+            source_entries.push((token, score));
             let aggregate = root_scores.entry(token).or_insert((0, 0));
             aggregate.0 = aggregate.0.saturating_add(i64::from(score));
             aggregate.1 = aggregate.1.saturating_add(1);
         }
+        region_emissions.push(source_entries);
         max_emissions = max_emissions.max(u32::try_from(emission_len).unwrap_or(u32::MAX));
 
         let prototype_word_start = prototype_word_base
             .checked_add(
                 u32::try_from(region_index + 1)
                     .map_err(|_| R4G1ExportError::FormatLimit("node index exceeds u32"))?
-                    .saturating_mul(SIGNATURE_WORDS as u32),
+                    .saturating_mul(R4G1_SIGNATURE_WORDS as u32),
             )
             .ok_or(R4G1ExportError::FormatLimit(
                 "ROUT prototype offset overflow",
@@ -420,7 +421,7 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
             .checked_add(
                 u32::try_from(region_index + 1)
                     .map_err(|_| R4G1ExportError::FormatLimit("node index exceeds u32"))?
-                    .saturating_mul(SIGNATURE_WORDS as u32),
+                    .saturating_mul(R4G1_SIGNATURE_WORDS as u32),
             )
             .ok_or(R4G1ExportError::FormatLimit("ROUT mask offset overflow"))?;
         nodes.push(Node {
@@ -428,7 +429,7 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
             child_len: 0,
             forward_start: 0,
             forward_len: 0,
-            emission_start: exported_emission_start,
+            emission_start: 0,
             emission_len: u16::try_from(emission_len)
                 .map_err(|_| R4G1ExportError::FormatLimit("emission count exceeds u16"))?,
             prototype_word_start,
@@ -438,6 +439,11 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
             path: read_path(source),
             path_len: source[9],
         });
+    }
+
+    let mut parents = vec![0usize; nodes.len()];
+    for (node_index, parent) in parents.iter_mut().enumerate().skip(1) {
+        *parent = deterministic_parent(&nodes, node_index)?;
     }
 
     let mut emit = vec![2, 0, 0, 0];
@@ -468,46 +474,46 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
         emit.extend_from_slice(&average_score(*sum, *count).to_le_bytes());
     }
     debug_assert_eq!(emit.len(), 4 + root_prefix);
-    for node in nodes.iter_mut().skip(1) {
-        node.emission_start = node
-            .emission_start
+    let mut residual_emit = Vec::new();
+    for node_index in 1..nodes.len() {
+        let start = u32::try_from(residual_emit.len())
+            .map_err(|_| R4G1ExportError::FormatLimit("emission offset exceeds u32"))?;
+        let parent = parents[node_index];
+        for &(token, score) in &region_emissions[node_index - 1] {
+            let parent_score = if parent == 0 {
+                root_scores
+                    .get(&token)
+                    .map(|(sum, count)| average_score(*sum, *count))
+                    .unwrap_or(0)
+            } else {
+                region_emissions[parent - 1]
+                    .iter()
+                    .find(|(parent_token, _)| *parent_token == token)
+                    .map(|(_, parent_score)| *parent_score)
+                    .unwrap_or(0)
+            };
+            residual_emit.extend_from_slice(&token.to_le_bytes());
+            residual_emit.extend_from_slice(&score.saturating_sub(parent_score).to_le_bytes());
+        }
+        let node = nodes
+            .get_mut(node_index)
+            .ok_or(R4G1ExportError::FormatLimit("node index is out of bounds"))?;
+        node.emission_start = start
             .checked_add(
                 u32::try_from(root_prefix)
                     .map_err(|_| R4G1ExportError::FormatLimit("root prior offset exceeds u32"))?,
             )
             .ok_or(R4G1ExportError::FormatLimit("emission offset overflow"))?;
     }
-    emit.extend_from_slice(&region_emit);
+    emit.extend_from_slice(&residual_emit);
 
     let mut edges = Vec::with_capacity(region_count);
-    for node_index in 1..node_count {
-        let node = nodes
+    for (node_index, parent) in parents.iter().enumerate().skip(1) {
+        let _ = nodes
             .get(node_index)
             .ok_or(R4G1ExportError::FormatLimit("node index is out of bounds"))?;
-        let parent = if node.path_len <= 1 {
-            0
-        } else {
-            let parent_len = node.path_len - 1;
-            let mut found = None;
-            let mut candidate = 1usize;
-            while candidate < node_index {
-                let possible = nodes
-                    .get(candidate)
-                    .ok_or(R4G1ExportError::FormatLimit("parent node is out of bounds"))?;
-                if possible.path_len == parent_len
-                    && same_path_prefix(node, possible, usize::from(parent_len))
-                {
-                    found = Some(candidate);
-                    break;
-                }
-                candidate += 1;
-            }
-            found.ok_or(R4G1ExportError::FormatLimit(
-                "region path has no deterministic parent",
-            ))?
-        };
         edges.push(Edge {
-            src: u32::try_from(parent)
+            src: u32::try_from(*parent)
                 .map_err(|_| R4G1ExportError::FormatLimit("edge source exceeds u32"))?,
             dst: u32::try_from(node_index)
                 .map_err(|_| R4G1ExportError::FormatLimit("edge destination exceeds u32"))?,
@@ -570,8 +576,8 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
 
     let rout_words = 1usize
         .checked_add(region_count)
-        .and_then(|words| words.checked_add(node_count.checked_mul(SIGNATURE_WORDS)?))
-        .and_then(|words| words.checked_add(node_count.checked_mul(SIGNATURE_WORDS)?))
+        .and_then(|words| words.checked_add(node_count.checked_mul(R4G1_SIGNATURE_WORDS)?))
+        .and_then(|words| words.checked_add(node_count.checked_mul(R4G1_SIGNATURE_WORDS)?))
         .ok_or(R4G1ExportError::FormatLimit("ROUT word count overflow"))?;
     let mut rout = vec![0u8; rout_words * 8];
     rout[0] = 3;
@@ -656,14 +662,14 @@ pub fn export_r4g1(artifact: &CompiledArtifact) -> Result<R4G1Export, R4G1Export
     head[148..180].copy_from_slice(blake3::hash(b"uor-semantic structural-r4g1-v1").as_bytes());
     put_u16(&mut head, 180, 64);
     put_u16(&mut head, 182, 64);
-    put_u16(&mut head, 184, SIGNATURE_WORDS as u16);
+    put_u16(&mut head, 184, R4G1_SIGNATURE_WORDS as u16);
     put_u16(&mut head, 186, 1);
     put_u32(&mut head, 188, max_emissions.max(1));
     put_u32(&mut head, 192, 2);
     put_u32(&mut head, 196, node_count_u32);
     put_u32(&mut head, 200, edge_count);
     head[204] = depth_count;
-    put_u16(&mut head, 212, SIGNATURE_BYTES);
+    put_u16(&mut head, 212, R4G1_SIGNATURE_BYTES);
     put_u32(&mut head, 220, vocab_size);
 
     let prov = b"uor-semantic structural-r4g1-v1\n";
@@ -755,6 +761,31 @@ fn read_path(bytes: &[u8]) -> [u16; 8] {
 
 fn same_path_prefix(left: &Node, right: &Node, length: usize) -> bool {
     left.path[..length] == right.path[..length]
+}
+
+fn deterministic_parent(nodes: &[Node], node_index: usize) -> Result<usize, R4G1ExportError> {
+    let node = nodes
+        .get(node_index)
+        .ok_or(R4G1ExportError::FormatLimit("node index is out of bounds"))?;
+    if node.path_len <= 1 {
+        return Ok(0);
+    }
+    let parent_len = node.path_len - 1;
+    let mut candidate = 1usize;
+    while candidate < node_index {
+        let possible = nodes
+            .get(candidate)
+            .ok_or(R4G1ExportError::FormatLimit("parent node is out of bounds"))?;
+        if possible.path_len == parent_len
+            && same_path_prefix(node, possible, usize::from(parent_len))
+        {
+            return Ok(candidate);
+        }
+        candidate += 1;
+    }
+    Err(R4G1ExportError::FormatLimit(
+        "region path has no deterministic parent",
+    ))
 }
 
 fn build_predictive_edges(
@@ -1036,7 +1067,10 @@ fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, R4G1ExportError> {
     ]))
 }
 
-fn read_words(bytes: &[u8], offset: usize) -> Result<[u64; SIGNATURE_WORDS], R4G1ExportError> {
+fn read_words(
+    bytes: &[u8],
+    offset: usize,
+) -> Result<[u64; SOURCE_SIGNATURE_WORDS], R4G1ExportError> {
     Ok([
         read_u64(bytes, offset)?,
         read_u64(bytes, offset + 8)?,

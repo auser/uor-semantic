@@ -81,8 +81,8 @@ pub use artifact::{
     EMISSION_RECORD_BYTES, EXACT_RECORD_BYTES, ExactPolicy, HEADER_BYTES, INDEX_BUCKETS,
     MAX_ARTIFACT_BYTES, MAX_CONTEXT_TOKENS, MAX_EMISSION_RECORDS, MAX_EXACT_RECORDS,
     MAX_REGION_INDEX_ENTRIES, MAX_REGION_RECORDS, MAX_ROUTE_DEPTH, Prediction, PredictionSource,
-    PredictionSummary, REGION_RECORD_BYTES, SIGNATURE_WORDS, TokenScore, context_hash,
-    context_signature,
+    PredictionSummary, R4G1_SIGNATURE_WORDS, REGION_RECORD_BYTES, SIGNATURE_WORDS, TokenScore,
+    context_hash, context_signature, context_signature_r4g1,
 };
 pub use census::{OperationBudget, OperationCensus};
 pub use cloud::{RegionMembership, ResolutionStatus, RouteCloud};

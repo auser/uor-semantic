@@ -10,7 +10,7 @@ use std::process::{Command, Stdio};
 
 use uor_semantic::{
     ArtifactPredictScratch, ArtifactView, ExactPolicy, GenerationState, Prediction, R4G1Graph,
-    R4G1Predictions, R4G1RouteCandidates, context_signature, generate_greedy_into,
+    R4G1Predictions, R4G1RouteCandidates, context_signature_r4g1, generate_greedy_into,
 };
 use uor_semantic_compiler::{
     CompiledArtifact, CompilerConfig, MAX_ROLLOUT_TOKENS, ObservationCorpus, ParityReport,
@@ -673,7 +673,7 @@ fn artifact_replay(artifact_path: &Path, r4g1_path: &Path) -> Result<(), CliErro
 fn artifact_predict_r4g1(path: &Path, tokens: &[u32], top_k: usize) -> Result<(), CliError> {
     let bytes = std::fs::read(path)?;
     let graph = R4G1Graph::parse(&bytes)?;
-    let signature = context_signature(tokens);
+    let signature = context_signature_r4g1(tokens);
     let mut candidates = R4G1RouteCandidates::<64>::new();
     let mut predictions = R4G1Predictions::<64>::new();
     graph.predict_top_k(&signature, &mut candidates, &mut predictions)?;

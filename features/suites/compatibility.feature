@@ -131,3 +131,9 @@ Feature: R4G1 and TLA5 compatibility bridge
     Given a validated R4G1 graph with root-prior and routed emissions
     When the no_std graph view predicts from a signature
     Then deterministic token scores are returned in caller-owned top-K order
+
+  @CX-23 @build
+  Scenario: R4G1 uses target-width signatures and chain residuals
+    Given a compiled R4G1 graph with parent-relative emission residuals
+    When the graph predicts with a target-width signature
+    Then Q16.16 scores accumulate along one deterministic refinement chain

@@ -534,6 +534,24 @@ impl<const CAPACITY: usize> R4G1Predictions<CAPACITY> {
             index += 1;
         }
 
+        self.insert_new(entry);
+    }
+
+    fn add_residual(&mut self, entry: R4G1Emission) {
+        let mut index = 0usize;
+        while index < self.len {
+            if self.entries[index].token == entry.token {
+                self.entries[index].score_q =
+                    self.entries[index].score_q.saturating_add(entry.score_q);
+                self.sort_initialized();
+                return;
+            }
+            index += 1;
+        }
+        self.insert_new(entry);
+    }
+
+    fn insert_new(&mut self, entry: R4G1Emission) {
         if self.len < CAPACITY {
             self.entries[self.len] = entry;
             self.len += 1;
@@ -1109,6 +1127,8 @@ impl<'a> R4G1Graph<'a> {
     }
 
     /// Reads one node's fixed-point EMIT entries into caller-owned storage.
+    /// Exported R4G1 nodes contain parent-relative residuals; use
+    /// [`Self::predict_top_k`] to apply the root prior and refinement chain.
     pub fn node_emissions<const CAPACITY: usize>(
         &self,
         node_index: u32,
@@ -1159,11 +1179,11 @@ impl<'a> R4G1Graph<'a> {
 
     /// Predicts deterministic top-K tokens from root-prior and routed EMIT data.
     ///
-    /// The caller owns both bounded buffers. Each token is retained once, using
-    /// the highest available fixed-point score from the root prior or a routed
-    /// node emission; ties are ordered by ascending token ID. This merge policy
-    /// is deliberately conservative for this bridge because exported node
-    /// entries are absolute scores, not target-graded residual contributions.
+    /// The caller owns both bounded buffers. Root entries are the base scores;
+    /// routed node entries are parent-relative residuals applied along the
+    /// deepest deterministic refinement chain with saturating fixed-point add.
+    /// Ties are ordered by ascending token ID. This remains a graph bridge, not
+    /// target graded class-code assignment.
     pub fn predict_top_k<const WORDS: usize, const ROUTE_CAPACITY: usize, const CAPACITY: usize>(
         &self,
         signature: &[u64; WORDS],
@@ -1182,12 +1202,56 @@ impl<'a> R4G1Graph<'a> {
             .ok_or(R4G1Error::SectionTooShort {
                 section: R4G1Section::Emit,
             })?;
+        let mut selected = None;
         for &candidate in candidates.as_slice() {
             let node = self
                 .node(candidate)
                 .ok_or(R4G1Error::RoutingCandidateOutOfBounds { candidate })?;
-            let bytes = self.node_emission_bytes(emit, candidate, node)?;
-            accumulate_emission_bytes(bytes, predictions);
+            let replace = match selected {
+                None => true,
+                Some(current) => {
+                    let current_node = self
+                        .node(current)
+                        .ok_or(R4G1Error::RoutingCandidateOutOfBounds { candidate: current })?;
+                    node.depth > current_node.depth
+                        || (node.depth == current_node.depth && candidate < current)
+                }
+            };
+            if replace {
+                selected = Some(candidate);
+            }
+        }
+
+        if let Some(selected) = selected {
+            let selected_depth = self
+                .node(selected)
+                .ok_or(R4G1Error::RoutingCandidateOutOfBounds {
+                    candidate: selected,
+                })?
+                .depth;
+            let mut target_depth = 1u8;
+            while target_depth <= selected_depth {
+                let mut cursor = selected;
+                loop {
+                    let node = self
+                        .node(cursor)
+                        .ok_or(R4G1Error::RoutingCandidateOutOfBounds { candidate: cursor })?;
+                    if node.depth <= target_depth {
+                        if node.depth == target_depth {
+                            let bytes = self.node_emission_bytes(emit, cursor, node)?;
+                            accumulate_residual_bytes(bytes, predictions);
+                        }
+                        break;
+                    }
+                    cursor = self
+                        .parent_node(cursor)
+                        .ok_or(R4G1Error::RoutingCandidateOutOfBounds { candidate: cursor })?;
+                }
+                if target_depth == selected_depth {
+                    break;
+                }
+                target_depth += 1;
+            }
         }
         Ok(())
     }
@@ -1258,6 +1322,20 @@ impl<'a> R4G1Graph<'a> {
             node: node_index,
             field: R4G1RangeField::Emission,
         })
+    }
+
+    fn parent_node(&self, node_index: u32) -> Option<u32> {
+        let mut edge_index = 0u32;
+        while edge_index < self.edge_count {
+            if let Some(edge) = self.edge(edge_index)
+                && edge.kind == 0
+                && edge.dst == node_index
+            {
+                return Some(edge.src);
+            }
+            edge_index += 1;
+        }
+        None
     }
 
     fn node_accepts<const WORDS: usize>(
@@ -1816,6 +1894,20 @@ fn accumulate_emission_bytes<const CAPACITY: usize>(
     let mut offset = 0usize;
     while offset < bytes.len() {
         predictions.accumulate(R4G1Emission {
+            token: read_u32(bytes, offset),
+            score_q: read_i32(bytes, offset + 4),
+        });
+        offset += 8;
+    }
+}
+
+fn accumulate_residual_bytes<const CAPACITY: usize>(
+    bytes: &[u8],
+    predictions: &mut R4G1Predictions<CAPACITY>,
+) {
+    let mut offset = 0usize;
+    while offset < bytes.len() {
+        predictions.add_residual(R4G1Emission {
             token: read_u32(bytes, offset),
             score_q: read_i32(bytes, offset + 4),
         });

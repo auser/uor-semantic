@@ -11,7 +11,7 @@ use uor_semantic::{
     MAX_REGION_RECORDS, Prediction, PredictionSource, R4G1Emissions, R4G1Error, R4G1Graph,
     R4G1Identity, R4G1Predictions, R4G1RangeField, R4G1RouteCandidates, R4G1Section, R4G1Structure,
     R4Status, ResidualContribution, ResidualContributionKind, ScoreAccumulator, ScoreQ,
-    ScoringError, TokenScore, context_signature, generate_greedy_into,
+    ScoringError, TokenScore, context_signature, context_signature_r4g1, generate_greedy_into,
 };
 use uor_semantic_cli::{
     CaptureOptions, CompileRequest as CliCompileRequest, DownloadRequest, SourceCompileRequest,
@@ -1405,7 +1405,7 @@ fn r4g1_runtime_replays_route_and_emit_without_allocation_cx_21() {
     let compiled = compile(&train(), CompilerConfig::accuracy()).expect("fixture compiles");
     let exported = export_r4g1(&compiled).expect("structural R4G1 export succeeds");
     let graph = R4G1Graph::parse(&exported.bytes).expect("exported graph validates");
-    let signature = context_signature(&[1, 2]);
+    let signature = context_signature_r4g1(&[1, 2]);
     let mut candidates = R4G1RouteCandidates::<8>::new();
 
     graph
@@ -1428,7 +1428,7 @@ fn r4g1_runtime_predicts_bounded_top_k_tokens_cx_22() {
     let compiled = compile(&train(), CompilerConfig::accuracy()).expect("fixture compiles");
     let exported = export_r4g1(&compiled).expect("structural R4G1 export succeeds");
     let graph = R4G1Graph::parse(&exported.bytes).expect("exported graph validates");
-    let signature = context_signature(&[1, 2]);
+    let signature = context_signature_r4g1(&[1, 2]);
     let mut candidates = R4G1RouteCandidates::<8>::new();
     let mut predictions = R4G1Predictions::<4>::new();
 
@@ -1442,4 +1442,52 @@ fn r4g1_runtime_predicts_bounded_top_k_tokens_cx_22() {
         pair[0].score_q > pair[1].score_q
             || (pair[0].score_q == pair[1].score_q && pair[0].token < pair[1].token)
     }));
+}
+
+#[test]
+fn r4g1_target_width_signature_and_chain_residuals_cx_23() {
+    let compiled = compile(
+        &train(),
+        CompilerConfig {
+            max_region_emissions: 3,
+            ..CompilerConfig::accuracy()
+        },
+    )
+    .expect("fixture compiles");
+    let exported = export_r4g1(&compiled).expect("R4G1 export succeeds");
+    let graph = R4G1Graph::parse(&exported.bytes).expect("exported graph validates");
+    assert_eq!(graph.signature_words(), 5);
+    let signature = context_signature_r4g1(&[1, 2]);
+    let mut candidates = R4G1RouteCandidates::<8>::new();
+    let mut predictions = R4G1Predictions::<8>::new();
+
+    graph
+        .predict_top_k(&signature, &mut candidates, &mut predictions)
+        .expect("target-width prediction succeeds");
+    let mut root = R4G1Emissions::<8>::new();
+    let mut node = R4G1Emissions::<8>::new();
+    graph.root_emissions(&mut root).expect("root reads");
+    graph.node_emissions(1, &mut node).expect("node reads");
+    assert_eq!(
+        root.as_slice()
+            .iter()
+            .find(|entry| entry.token == 4)
+            .map(|entry| entry.score_q),
+        Some(-8)
+    );
+    assert_eq!(
+        node.as_slice()
+            .iter()
+            .find(|entry| entry.token == 4)
+            .map(|entry| entry.score_q),
+        Some(-2)
+    );
+    assert_eq!(
+        predictions
+            .as_slice()
+            .iter()
+            .find(|entry| entry.token == 4)
+            .map(|entry| entry.score_q),
+        Some(-10)
+    );
 }

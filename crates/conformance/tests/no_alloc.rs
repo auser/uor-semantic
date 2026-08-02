@@ -134,7 +134,7 @@ fn artifact_parse_predict_and_generation_perform_zero_heap_operations_rt_03() {
 #[test]
 fn r4g1_route_and_emit_perform_zero_heap_operations_cx_21() {
     let _guard = TEST_LOCK.lock().expect("allocator test lock");
-    use uor_semantic::{R4G1Emissions, R4G1Graph, R4G1RouteCandidates, context_signature};
+    use uor_semantic::{R4G1Emissions, R4G1Graph, R4G1RouteCandidates, context_signature_r4g1};
     use uor_semantic_compiler::{CompilerConfig, ObservationCorpus, compile, export_r4g1};
 
     let corpus = ObservationCorpus::parse(concat!(
@@ -156,7 +156,7 @@ fn r4g1_route_and_emit_perform_zero_heap_operations_cx_21() {
     let compiled = compile(&corpus, CompilerConfig::accuracy()).expect("fixture compiles");
     let exported = export_r4g1(&compiled).expect("R4G1 export succeeds");
     let graph = R4G1Graph::parse(&exported.bytes).expect("R4G1 graph validates");
-    let signature = context_signature(&[1, 2]);
+    let signature = context_signature_r4g1(&[1, 2]);
     let mut candidates = R4G1RouteCandidates::<8>::new();
     let mut emissions = R4G1Emissions::<4>::new();
 
@@ -190,7 +190,7 @@ fn r4g1_route_and_emit_perform_zero_heap_operations_cx_21() {
 #[test]
 fn r4g1_prediction_performs_zero_heap_operations_cx_22() {
     let _guard = TEST_LOCK.lock().expect("allocator test lock");
-    use uor_semantic::{R4G1Graph, R4G1Predictions, R4G1RouteCandidates, context_signature};
+    use uor_semantic::{R4G1Graph, R4G1Predictions, R4G1RouteCandidates, context_signature_r4g1};
     use uor_semantic_compiler::{CompilerConfig, ObservationCorpus, compile, export_r4g1};
 
     let corpus = ObservationCorpus::parse(concat!(
@@ -212,7 +212,7 @@ fn r4g1_prediction_performs_zero_heap_operations_cx_22() {
     let compiled = compile(&corpus, CompilerConfig::accuracy()).expect("fixture compiles");
     let exported = export_r4g1(&compiled).expect("R4G1 export succeeds");
     let graph = R4G1Graph::parse(&exported.bytes).expect("R4G1 graph validates");
-    let signature = context_signature(&[1, 2]);
+    let signature = context_signature_r4g1(&[1, 2]);
     let mut candidates = R4G1RouteCandidates::<8>::new();
     let mut predictions = R4G1Predictions::<4>::new();
 

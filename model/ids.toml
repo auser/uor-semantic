@@ -377,3 +377,9 @@ id = "CX-22"
 level = "build"
 suite = "compatibility"
 statement = "The no_std R4G1 graph view produces deterministic bounded top-K token predictions by merging root-prior and routed EMIT scores through caller-owned buffers."
+
+[[id]]
+id = "CX-23"
+level = "build"
+suite = "compatibility"
+statement = "The R4G1 bridge emits target-width 36-byte signatures and applies saturating parent-relative EMIT residuals along one deterministic refinement chain without claiming target graded class-code parity."

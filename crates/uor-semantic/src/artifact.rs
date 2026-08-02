@@ -11,6 +11,9 @@ pub const ARTIFACT_MAGIC: &[u8; 8] = b"UORSEM01";
 pub const ARTIFACT_VERSION: u16 = 2;
 /// Packed semantic signature width in machine words.
 pub const SIGNATURE_WORDS: usize = 4;
+
+/// Target-width R4G1 signature storage: five u64 words carry 36 semantic bytes.
+pub const R4G1_SIGNATURE_WORDS: usize = 5;
 /// Maximum exact-context length stored by the format.
 pub const MAX_CONTEXT_TOKENS: usize = 32;
 /// Maximum divisible path depth stored by the format.
@@ -1032,6 +1035,17 @@ pub fn context_signature(context: &[u32]) -> [u64; SIGNATURE_WORDS] {
         index += 1;
     }
     output
+}
+
+/// Computes the target-width R4G1 signature with a zero-padded fifth word.
+///
+/// The semantic compiler currently derives 32 meaningful bytes. R4G1 v0
+/// stores 36 bytes in five u64 words, so the compatibility bridge preserves
+/// the existing four-word signature and makes the additional four bytes
+/// explicit zero padding rather than inventing target class-code bits.
+pub fn context_signature_r4g1(context: &[u32]) -> [u64; R4G1_SIGNATURE_WORDS] {
+    let base = context_signature(context);
+    [base[0], base[1], base[2], base[3], 0]
 }
 
 fn mix64(mut value: u64) -> u64 {
